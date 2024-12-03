@@ -246,9 +246,9 @@ class MyDataset(Dataset):
         print('number of subjects in the ', subset, 'set: ', str(len(self.subj_indexes)))
 
         # Read the feature files
-        self.X_power = np.load(self.dir_power)
-        self.X_hrv_t = np.load(self.dir_hrv_t)
-        self.X_hrv_f = np.load(self.dir_hrv_f)
+        self.X_power = torch.tensor(np.load(self.dir_power), dtype=torch.float32)
+        self.X_hrv_t = torch.tensor(np.load(self.dir_hrv_t), dtype=torch.float32)
+        self.X_hrv_f = torch.tensor(np.load(self.dir_hrv_f), dtype=torch.float32)
         # Retain only the valid subjects
         self.X_power = self.X_power[self.valid_indexes]
         self.X_hrv_t = self.X_hrv_t[self.valid_indexes]
@@ -285,6 +285,9 @@ class MyDataset(Dataset):
         if self.stats:
             eeg = (eeg - self.stats['eeg_mean']) / self.stats['eeg_std']
             ecg = (ecg - self.stats['ecg_mean']) / self.stats['ecg_std']
+            power = (power - self.stats['power_mean']) / self.stats['power_std']
+            hrv_time = (hrv_time - self.stats['hrv_t_mean']) / self.stats['hrv_t_std']
+            hrv_freq = (hrv_freq - self.stats['hrv_f_mean']) / self.stats['hrv_f_std']
 
         # if self.subset == 'train':
         #     eeg = standardize_raw(eeg, method='all_timesteps', subset='train')
@@ -299,7 +302,7 @@ class MyDataset(Dataset):
             'hrv_freq': hrv_freq,
             'ecg': ecg,
             'eeg': eeg,
-            'label': target}
+            'label': torch.tensor(target, dtype=torch.float32)}
 
     @staticmethod
     def truncate_pad(data, type, seq_len_t=5):
@@ -347,6 +350,14 @@ def train_model(model, criterion, optimizer, train_loader, val_loader, num_epoch
             x_eeg = batch['eeg'].to(device)
             labels = batch['label'].to(device)
 
+            # Ensure all inputs are Float tensors
+            x_time_hrv = x_time_hrv.float()
+            x_freq_hrv = x_freq_hrv.float()
+            x_power = x_power.float()
+            x_ecg = x_ecg.float()
+            x_eeg = x_eeg.float()
+
+            model = model.float()
             outputs = model(x_time_hrv, x_freq_hrv, x_power, x_ecg, x_eeg)
 
             if task_type == "classification":
@@ -394,6 +405,13 @@ def train_model(model, criterion, optimizer, train_loader, val_loader, num_epoch
                 x_ecg = batch['ecg'].to(device)
                 x_eeg = batch['eeg'].to(device)
                 labels = batch['label'].to(device)
+
+                # Ensure all inputs are Float tensors
+                x_time_hrv = x_time_hrv.float()
+                x_freq_hrv = x_freq_hrv.float()
+                x_power = x_power.float()
+                x_ecg = x_ecg.float()
+                x_eeg = x_eeg.float()
 
                 outputs = model(x_time_hrv, x_freq_hrv, x_power, x_ecg, x_eeg)
 
@@ -599,49 +617,6 @@ def standardization(X_train, X_val, X_test, method='all_timesteps'):
     return X_train_standardized, X_val_standardized, X_test_standardized
 
 
-# def compute_zscore_stat(train_dataset):
-#     n_samples = 0
-#
-#     # Initialize accumulators
-#     ecg_sum, ecg_sum_sq = 0.0, 0.0
-#     eeg_sum, eeg_sum_sq = 0.0, 0.0
-#
-#     for idx in range(len(train_dataset)):
-#
-#         sample = train_dataset[idx]  # Get a sample dictionary
-#         ecg = sample['ecg'].numpy()
-#         eeg = sample['eeg'].numpy()
-#
-#         # Update counts
-#         # n = n_samples + 1
-#
-#         # Sum and sum of squares for ECG and EEG (global)
-#         ecg_sum += ecg.sum()
-#         ecg_sum_sq += (ecg ** 2).sum()
-#
-#         eeg_sum += eeg.sum()
-#         eeg_sum_sq += (eeg ** 2).sum()
-#
-#         n_samples += 1
-#
-#     # Compute mean and std
-#     ecg_mean = ecg_sum / (n_samples * ecg.size)
-#     ecg_std = np.sqrt((ecg_sum_sq / (n_samples * ecg.size)) - ecg_mean ** 2)
-#
-#     eeg_mean = eeg_sum / (n_samples * eeg.size)
-#     eeg_std = np.sqrt((eeg_sum_sq / (n_samples * eeg.size)) - eeg_mean ** 2)
-#
-#     # Compute standard deviation from variance
-#     stats = {
-#         'ecg_mean': ecg_mean,
-#         'ecg_std': ecg_std,
-#         'eeg_mean': eeg_mean,
-#         'eeg_std': eeg_std,
-#     }
-#
-#     return stats
-
-
 def compute_zscore_stat(train_dataset):
     """
     Compute the mean and standard deviation incrementally for large datasets.
@@ -725,33 +700,6 @@ def compute_zscore_stat(train_dataset):
     return stats
 
 
-# def compute_zscore_stat(train_dataset):
-#     ecg_list, eeg_list = [], []
-#
-#     for idx in range(len(train_dataset.subj_indexes)):
-#         sample = train_dataset[idx]  # Get a sample dictionary
-#         ecg_list.append(sample['ecg'].numpy().flatten())  # Flatten ECG and EEG data
-#         eeg_list.append(sample['eeg'].numpy().flatten())
-#
-#     # Stack all samples to calculate mean and std
-#     ecg_array = np.hstack(ecg_list)
-#     ecg_mean = ecg_array.mean()
-#     ecg_std = ecg_array.std()
-#     del ecg_array, ecg_list
-#     eeg_array = np.hstack(eeg_list)
-#     eeg_mean = eeg_array.mean()
-#     eeg_std = eeg_array.std()
-#     del eeg_array, eeg_list
-#
-#     stats = {
-#         'ecg_mean': ecg_mean,
-#         'ecg_std': ecg_std,
-#         'eeg_mean': eeg_mean,
-#         'eeg_std': eeg_std,
-#     }
-#     return stats
-
-
 def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, model_class, output_dir, device,
                                num_epochs=300, batch_size_train=8, batch_size_val=128, batch_size_test=1,
                                learning_rate=0.00005, num_layers_feat=2,
@@ -763,19 +711,12 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
     """
     # Read the target file
     targets = pd.read_csv(target_file)
-    tasks = targets.columns.tolist()[1:]  # Exclude the 'test_sessions.subid' column
+    # tasks = targets.columns.tolist()[1:]  # Exclude the 'test_sessions.subid' column
+    tasks = ['pcet_concept_level_responses', 'pvtb_errors_commission']
     names_target = targets['subject_id'].to_numpy()
 
     # Ensure the output directory exists
     os.makedirs(output_dir, exist_ok=True)
-
-    # dir_power, dir_hrv_t, dir_hrv_f = dir_features
-    # dir_ecg, dir_eeg = dir_raw
-
-    # Load the extracted EEG/ECG features
-    # X_power = np.load(dir_power)
-    # X_hrv_t = np.load(dir_hrv_t)
-    # X_hrv_f = np.load(dir_hrv_f)
 
     # Loop through each task (column)
     for task in tasks:
@@ -791,11 +732,6 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
         y_task = targets1[task].to_numpy()
         # Indices of subjects retained for this task in the input data
         valid_indices = np.where(np.isin(names_input, subj_to_ret))[0]
-
-        # Filter input data for valid subjects
-        # X_power_task = X_power[valid_indices]
-        # X_hrv_t_task = X_hrv_t[valid_indices]
-        # X_hrv_f_task = X_hrv_f[valid_indices]
 
         # compare subjs in target file and raw data dir (to see if you can use "valid_indices" for raw data)
 
@@ -822,34 +758,28 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
         # Extract the validation data subject indexes (remaining subjects)
         val_subj = [element for element in subj_indexes1 if element not in train_subj]
 
-        # X_power_train, X_power_val, X_power_test = X_power_task[train_subj], X_power_task[val_subj], X_power_task[test_subj]
-        # X_hrv_t_train, X_hrv_t_val, X_hrv_t_test = X_hrv_t_task[train_subj], X_hrv_t_task[val_subj], X_hrv_t_task[test_subj]
-        # X_hrv_f_train, X_hrv_f_val, X_hrv_f_test = X_hrv_f_task[train_subj], X_hrv_f_task[val_subj], X_hrv_f_task[test_subj]
-        #
-        # y_train, y_val, y_test = y_task[train_subj], y_task[val_subj], y_task[test_subj]
-
-        # Standardize the data
-        # X_power_train, X_power_val, X_power_test = standardization(X_power_train, X_power_val, X_power_test, method='all_timesteps')
-        # X_hrv_t_train, X_hrv_t_val, X_hrv_t_test = standardization(X_hrv_t_train, X_hrv_t_val, X_hrv_t_test, method='all_timesteps')
-        # X_hrv_f_train, X_hrv_f_val, X_hrv_f_test = standardization(X_hrv_f_train, X_hrv_f_val, X_hrv_f_test, method='all_timesteps')
-
         # Create PyTorch datasets and loaders
         train_dataset = MyDataset(dir_raw_mod, dir_features, y_task, valid_indices, train_subj, 'train')
         # Extract feature and raw signal dimensions
         feat_dims = (train_dataset.X_hrv_t.shape[-1], train_dataset.X_hrv_f.shape[-1], train_dataset.X_power.shape[-1])
         raw_dims = (train_dataset[0]['ecg'].shape[-1], train_dataset[0]['eeg'].shape[-1])
-        stats = compute_zscore_stat(train_dataset)
-        with open("stats.csv", "w", newline="") as csv_file:
-            writer = csv.writer(csv_file)
-            for key, value in stats.items():
-                writer.writerow([key] + value)
-        # Load from CSV
+        # stats = compute_zscore_stat(train_dataset)
+        # with open("stats/stats.csv", "w", newline="") as csv_file:
+        #     writer = csv.writer(csv_file)
+        #     for key, value in stats.items():
+        #         if isinstance(value, (np.ndarray, list)):  # Check if array or list
+        #             writer.writerow([key] + value.tolist())
+        #         else:  # For scalar values, wrap them in a list
+        #             writer.writerow([key, value])
+        # Load stats.csv (computed and saved in the previous step)
         stats = {}
-        with open("stats.csv", "r") as csv_file:
+        with open("stats/stats.csv", "r") as csv_file:
             reader = csv.reader(csv_file)
             for row in reader:
                 stats[row[0]] = list(map(float, row[1:]))
+        stats = {key: value[0] for key, value in stats.items()}
         train_dataset = MyDataset(dir_raw_mod, dir_features, y_task, valid_indices, train_subj, 'train', stats)
+        # a = train_dataset[0]
         val_dataset = MyDataset(dir_raw_mod, dir_features, y_task, valid_indices, val_subj, 'val', stats)
         test_dataset = MyDataset(dir_raw_mod, dir_features, y_task, valid_indices, test_subj, 'test', stats)
 
@@ -914,19 +844,19 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
 
 
 # 5. Hyperparameters and Data Preparation
-d_model_raw = 1024
-d_model_feat = 16  # 15-64
+d_model_raw = 128
+d_model_feat = 8  # 15-64
 nhead = 8
-num_layers_feat = 3
-num_layers_raw = 3
+num_layers_feat = 2
+num_layers_raw = 2
 
-dim_feedforward_feat = 64  # 64-128
-dim_feedforward_raw = 256  #
+dim_feedforward_feat = 16  # 64-128
+dim_feedforward_raw = 92  #
 output_dim = 1  # Set to 1 for binary classification or regression; set to number of classes for multi-class classific
 dropout = 0.1
 task_type = "classification"
 
-num_epochs = 150
+num_epochs = 20
 batch_size_train = 16
 batch_size_val = 64
 batch_size_test = 1
@@ -1019,11 +949,11 @@ train_model_multiple_tasks(
     model_class=MultiPathTransformerClassifier,
     output_dir=output_dir,
     device=device,
-    num_epochs=300,  # Reduced epochs for faster testing
+    num_epochs=num_epochs,  # Reduced epochs for faster testing
     batch_size_train=8,
     batch_size_val=128,
     batch_size_test=1,
-    learning_rate=0.00003,
+    learning_rate=0.00001,
     d_model_feat=d_model_feat,
     d_model_raw=d_model_raw,
     nhead=nhead,
