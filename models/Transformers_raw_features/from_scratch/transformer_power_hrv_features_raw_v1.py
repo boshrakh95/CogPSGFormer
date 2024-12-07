@@ -733,6 +733,28 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
         # Indices of subjects retained for this task in the input data
         valid_indices = np.where(np.isin(names_input, subj_to_ret))[0]
 
+        # ### For combining tasks
+        # # Define the two tasks you want to merge
+        # task1 = tasks[0]  # Replace with the name of the first task
+        # task2 = tasks[1]  # Replace with the name of the second task
+        # # Identify subjects with non-NaN values for both tasks
+        # names_task1 = names_target[~np.isnan(targets[task1])]
+        # names_task2 = names_target[~np.isnan(targets[task2])]
+        # # Ids of subjects that are in both the input and target data for both tasks
+        # subj_to_ret_task1 = np.intersect1d(names_input, names_task1)
+        # subj_to_ret_task2 = np.intersect1d(names_input, names_task2)
+        # # Retain only subjects that have values for both tasks
+        # subj_to_ret = np.intersect1d(subj_to_ret_task1, subj_to_ret_task2)
+        # # Get target values for the subjects retained
+        # targets_filtered = targets[targets['subject_id'].isin(subj_to_ret)]
+        # # Extract and merge the target values for the two tasks by summing them
+        # y_task1 = targets_filtered[task1].to_numpy()
+        # y_task2 = targets_filtered[task2].to_numpy()
+        # y_task = y_task1 - y_task2  # Summed target values
+        # # Indices of subjects retained for this merged task in the input data
+        # valid_indices = np.where(np.isin(names_input, subj_to_ret))[0]
+        # ### End of combining tasks
+
         # compare subjs in target file and raw data dir (to see if you can use "valid_indices" for raw data)
 
         # Modify raw data directories to include only the subjects retained for this task
@@ -867,18 +889,6 @@ path_save = "/media/livia/Elements/public_sleep_data/stages/stages/original/yasa
 dir_targets = path_save + "/all_scores_classification_for_yasa_c3_eeg_rel_power_analysis.csv"
 dir_ecg = sorted(glob2.glob(path_file + '/[!p]*/yasa_outputs/ecg_segmented_2min/*'))
 dir_eeg = sorted(glob2.glob(path_file + '/[!p]*/yasa_outputs/eeg_segmented_30sec/*'))
-
-# found in "test_rnn_power.py"
-path_file2 = r'/media/livia/Elements/public_sleep_data/stages/stages/original/'
-subj_retained_for_power_analysis = pd.read_csv(path_file2 + "yasa_eeg_powers/subjects_retained_for_power_analysis.csv", header=None)
-subj_retained_for_power_analysis = subj_retained_for_power_analysis.values.flatten().tolist()
-names_ret = []
-for num_subj in range(len(subj_retained_for_power_analysis)):
-    m = re.search('.*/([^/]+)$', subj_retained_for_power_analysis[num_subj])
-    if m:
-        name = m.group(1)
-    names_ret.append(name)
-names_ret = np.array(names_ret)
 
 # Read the extracted EEG/ECG features
 dir_power = path_save + "/yasa_c3_eeg_rel_powers.npy"
