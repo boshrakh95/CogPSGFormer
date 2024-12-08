@@ -61,6 +61,7 @@ def parse_args():
     parser.add_argument('--n-heads', type=int, required=True, help='Number of heads in Transformer')
     parser.add_argument('--dropout', type=float, required=True, help='Dropout rate in Transformer')
     parser.add_argument('--dim-fc', type=int, required=True, help='Fully connected dimension in Transformer')
+    parser.add_argument('--fold', type=int, required=True, help='Fold number for cross-validation')
     return parser.parse_args()
 
 
