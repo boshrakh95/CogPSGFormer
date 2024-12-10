@@ -22,9 +22,11 @@ from torch import nn, Tensor
 from torch.nn import functional as F
 from torch.utils.data import DataLoader, Dataset
 from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, roc_curve, auc
 import numpy as np
 import glob2
+from itertools import product
 # from torch.nn import Linear, ReLU, MSELoss,Module, Dropout
 # from torch.optim import Adam
 import random2
@@ -352,7 +354,7 @@ class MyDataset(Dataset):
 
 
 def train_model(model, criterion, optimizer, train_loader, val_loader, num_epochs, device,
-                task_output_dir, task, task_type="classification"):
+                task_output_dir, task, task_type="classification", conf_idx=None):
 
     model.to(device)
 
@@ -376,11 +378,7 @@ def train_model(model, criterion, optimizer, train_loader, val_loader, num_epoch
             labels = batch['label'].to(device)
 
             # Ensure all inputs are Float tensors
-            x_time_hrv = x_time_hrv.float()
-            x_freq_hrv = x_freq_hrv.float()
-            x_power = x_power.float()
-            x_ecg = x_ecg.float()
-            x_eeg = x_eeg.float()
+            x_power, x_time_hrv, x_freq_hrv, x_ecg, x_eeg = map(lambda x: x.float(), [x_power, x_time_hrv, x_freq_hrv, x_ecg, x_eeg])
 
             model = model.float()
             outputs = model(x_time_hrv, x_freq_hrv, x_power, x_ecg, x_eeg)
@@ -474,7 +472,7 @@ def train_model(model, criterion, optimizer, train_loader, val_loader, num_epoch
     ax1.plot(range(1, num_epochs + 1), val_losses, label="Validation Loss")
     ax1.set_xlabel("Epoch")
     ax1.set_ylabel("Loss")
-    ax1.set_title("Training and Validation Loss")
+    ax1.set_title(f"Training and Validation Loss for Configuration {conf_idx}")
     ax1.legend()
 
     # Plot Accuracy (only if classification task)
@@ -483,13 +481,13 @@ def train_model(model, criterion, optimizer, train_loader, val_loader, num_epoch
         ax2.plot(range(1, num_epochs + 1), val_accuracies, label="Validation Accuracy")
         ax2.set_xlabel("Epoch")
         ax2.set_ylabel("Accuracy (%)")
-        ax2.set_title("Training and Validation Accuracy")
+        ax2.set_title(f"Training and Validation Accuracy for Configuration {conf_idx}")
         ax2.legend()
 
     plt.tight_layout()
     # plt.show()
-    learning_curve_path = os.path.join(task_output_dir, "learning_curves_task_" + task + ".png")
-    # plt.savefig(learning_curve_path)
+    learning_curve_path = os.path.join(task_output_dir, "learning_curves_task_" + task + f"_conf{conf_idx}.png")
+    plt.savefig(learning_curve_path)
     plt.close()
 
     if task_type == "classification":
@@ -498,22 +496,29 @@ def train_model(model, criterion, optimizer, train_loader, val_loader, num_epoch
         return train_losses, val_losses
 
 
-# EDIT for multiple tasks and added raw data
-def test_model(model, test_loader, device, task_type="classification"):
+def test_model(model, test_loader, device, task_output_dir, task,
+               task_type="classification", conf_idx=None):
 
     model.eval()
     correct = 0
     total = 0
     test_loss = 0
+    all_predictions = []
+    all_labels = []
 
     with torch.no_grad():
         for batch in test_loader:
-            power_features = batch['power'].to(device)
-            hrv_time_features = batch['hrv_time'].to(device)
-            hrv_freq_features = batch['hrv_freq'].to(device)
+            x_power = batch['power'].to(device)
+            x_time_hrv = batch['hrv_time'].to(device)
+            x_freq_hrv = batch['hrv_freq'].to(device)
+            x_ecg = batch['ecg'].to(device)
+            x_eeg = batch['eeg'].to(device)
             labels = batch['label'].to(device)
 
-            outputs = model(power_features, hrv_time_features, hrv_freq_features)
+            x_power, x_time_hrv, x_freq_hrv, x_ecg, x_eeg = map(lambda x: x.float(),
+                                                                [x_power, x_time_hrv, x_freq_hrv, x_ecg, x_eeg])
+
+            outputs = model(x_time_hrv, x_freq_hrv, x_power, x_ecg, x_eeg)
 
             if task_type == "classification":
                 if model.output_dim == 1:
@@ -524,18 +529,29 @@ def test_model(model, test_loader, device, task_type="classification"):
                     _, predicted = torch.max(outputs, 1)  # Get the index of the max logit
                 correct += (predicted == labels).sum().item()
                 total += labels.size(0)
+                all_predictions.extend(predicted.cpu().numpy())
+                all_labels.extend(labels.cpu().numpy())
             elif task_type == "regression":
                 # For regression, you can compute test loss if a criterion is provided
                 test_loss += F.mse_loss(outputs.squeeze(), labels.float(), reduction='sum').item()  # Example loss calculation
+                all_predictions.extend(outputs.squeeze().cpu().numpy())
+                all_labels.extend(labels.cpu().numpy())
+
+    # Save test results
+    results_path = os.path.join(task_output_dir, f"test_results_task{task}_conf{conf_idx}.csv")
+    with open(results_path, "w") as f:
+        writer = csv.writer(f)
+        writer.writerow(["True Label", "Prediction"])
+        for label, pred in zip(all_labels, all_predictions):
+            writer.writerow([label, pred])
 
     if task_type == "classification":
         accuracy = 100 * correct / total
-        print(f'Test Accuracy: {accuracy:.2f}%')
+        print(f"Test Accuracy for Configuration {conf_idx}: {accuracy:.2f}%")
         return accuracy
     elif task_type == "regression":
-        # Compute Mean Squared Error for regression
         mean_squared_error = test_loss / total
-        print(f'Test Mean Squared Error: {mean_squared_error:.4f}')
+        print(f"Test MSE for Configuration {conf_idx}: {mean_squared_error:.4f}")
         return mean_squared_error
 
 
@@ -725,26 +741,16 @@ def compute_zscore_stat(train_dataset):
     return stats
 
 
-# def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, model_class, output_dir, device,
-#                                num_epochs=300, batch_size_train=8, batch_size_val=128, batch_size_test=1,
-#                                learning_rate=0.00005, num_layers_feat=2,
-#                                num_layers_raw=2, d_model_feat=128, d_model_raw=128, nhead=4,
-#                                dim_feedforward_feat=512, dim_feedforward_raw=512, output_dim=1, dropout=0.1,
-#                                task_type="classification", freeze=False, activation="relu", norm="BatchNorm"):
 def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, model_class, output_dir, device,
-                               num_epochs=300, batch_size_train=8, batch_size_val=128, batch_size_test=1,
-                               learning_rate=0.00005, num_layers_feat=2,
-                               num_layers_raw=2, d_model_feat=128, d_model_raw=128, nhead=4,
-                               dim_feedforward_feat=512, dim_feedforward_raw=512,
-                               dim_fc=256, output_dim=1, dropout=0.1,
-                               task_type="classification", freeze=False, activation="relu", norm="BatchNorm"):
+                               hyperparams, batch_size_train=8, batch_size_val=128, batch_size_test=1, output_dim=1,
+                               fold=1, task_type="classification", freeze=False, activation="relu", norm="BatchNorm"):
     """
     Train the model for each column in the target file.
     """
     # Read the target file
     targets = pd.read_csv(target_file)
     # tasks = targets.columns.tolist()[1:]  # Exclude the 'test_sessions.subid' column
-    tasks = ['pcet_concept_level_responses', 'pvtb_errors_commission']
+    tasks = ['Combined pcet_concept_level_responses and pvtb_errors_commission']
     names_target = targets['subject_id'].to_numpy()
 
     # Ensure the output directory exists
@@ -767,8 +773,8 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
 
         ### For combining tasks
         # Define the two tasks you want to merge
-        task1 = tasks[0]  # Replace with the name of the first task
-        task2 = tasks[1]  # Replace with the name of the second task
+        task1 = ['pcet_concept_level_responses']
+        task2 = ['pvtb_errors_commission']
         # Identify subjects with non-NaN values for both tasks
         names_task1 = names_target[~np.isnan(targets[task1])]
         names_task2 = names_target[~np.isnan(targets[task2])]
@@ -787,30 +793,28 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
         valid_indices = np.where(np.isin(names_input, subj_to_ret))[0]
         ### End of combining tasks
 
-        # compare subjs in target file and raw data dir (to see if you can use "valid_indices" for raw data)
-
         # Modify raw data directories to include only the subjects retained for this task
         dir_raw_mod = tuple([[lst[i] for i in valid_indices] for lst in dir_raw])
 
-        # Split data into train/val/test sets (1 subject test, ~80% train, ~20% val)
+        # Split data into train/val/test sets (1/10 test, 9/10 train + val, 80% train, 20% val)
         # Find the indexes of the train, val, and test data
-        fold = 1
         cohort_size = len(y_task)
-        all_subjs = list(range(cohort_size))
-        test_subj = [fold - 1]  # works only for the 1st fold, modify for other folds
-        # Update the outlier list (remove potential test subjects)
-        subj_indexes1 = [element for element in all_subjs if element not in test_subj]
+        n_splits = 10  # Number of splits for cross-validation
+        val_size = 0.2  # 20% of train+validation data for validation
+        fold_size = cohort_size // n_splits
+        test_start = fold * fold_size
+        test_end = test_start + fold_size if fold < n_splits - 1 else cohort_size
 
-        # 80% of the subjects used for train
-        train_size = int(80 * len(subj_indexes1) / 100)
-        # the rest 20% of the subjects used for validation
-        val_size = len(subj_indexes1) - train_size
+        # Test indices
+        test_subj = np.arange(test_start, test_end)
 
-        # Extract the train data subject indexes
-        random2.seed(123)
-        train_subj = random2.sample(subj_indexes1, train_size)
-        # Extract the validation data subject indexes (remaining subjects)
-        val_subj = [element for element in subj_indexes1 if element not in train_subj]
+        # Remaining indices for train+validation
+        train_val_indices = np.concatenate([np.arange(0, test_start), np.arange(test_end, cohort_size)])
+
+        # Split train+validation into train and validation
+        train_subj, val_subj = train_test_split(
+            train_val_indices, test_size=val_size, random_state=fold, shuffle=True
+        )
 
         # Create PyTorch datasets and loaders
         train_dataset = MyDataset(dir_raw_mod, dir_features, y_task, valid_indices, train_subj, 'train')
@@ -827,7 +831,7 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
         #             writer.writerow([key, value])
         # Load stats.csv (computed and saved in the previous step)
         stats = {}
-        with open("../stats/stats.csv", "r") as csv_file:
+        with open(f"/home/boshra95/scratch/datasets/stages/stats/10fold/stats_fold{fold+1}.csv", "r") as csv_file:
             reader = csv.reader(csv_file)
             for row in reader:
                 stats[row[0]] = list(map(float, row[1:]))
@@ -837,61 +841,145 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
         val_dataset = MyDataset(dir_raw_mod, dir_features, y_task, valid_indices, val_subj, 'val', stats)
         test_dataset = MyDataset(dir_raw_mod, dir_features, y_task, valid_indices, test_subj, 'test', stats)
 
-        # X_power_train, X_hrv_t_train, X_hrv_f_train, dir_ecg_mod, dir_eeg_mod, y_train)
-        # val_dataset = MyDataset(X_power_val, X_hrv_t_val, X_hrv_f_val, dir_ecg_mod, dir_eeg_mod, y_val)
-        # test_dataset = MyDataset(X_power_test, X_hrv_t_test, X_hrv_f_test, dir_ecg_mod, dir_eeg_mod, y_test)
-
         train_loader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True)
         val_loader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=False)
         test_loader = DataLoader(test_dataset, batch_size=batch_size_test, shuffle=False)
 
-        # Initialize model, optimizer, and loss function
-        # feat_dims = (X_power_train.shape[-1], X_hrv_t_train.shape[-1], X_hrv_f_train.shape[-1])
-        # raw_dims = (X_ecg_train.shape[-1], X_eeg_train.shape[-1])
-        model = model_class(feat_dims=feat_dims, raw_dims=raw_dims, d_model_feat=d_model_feat, d_model_raw=d_model_raw,
-                            nhead=nhead, num_layers_feat=num_layers_feat, num_layers_raw=num_layers_raw,
-                            dim_feedforward_feat=dim_feedforward_feat, dim_feedforward_raw=dim_feedforward_raw,
-                            dim_fc=dim_fc, output_dim=output_dim, dropout=dropout, activation=activation, norm=norm,
-                            freeze=freeze, task_type=task_type).to(device)
-        optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-        if task_type == "classification":
-            if output_dim == 1:
-                criterion = nn.BCEWithLogitsLoss()  # Binary classification
-            else:
-                criterion = nn.CrossEntropyLoss()  # Multi-class classification
-        elif task_type == "regression":
-            criterion = nn.MSELoss()  # Mean Squared Error for regression
-        else:
-            raise ValueError("task_type should be 'classification' or 'regression'")
+        # Setup configurations for hyperparameter optimization
+        num_config = 5  # Number of configurations to try
+        random2.seed(42)
+        all_configs = list(product(*hyperparams.values()))  # Generate all possible configurations
+        config_keys = list(hyperparams.keys())
+        selected_configs = random2.sample(all_configs, num_config)  # Randomly sample 5 configurations
 
-        # Save results
+        # Dir for saving the results
         task_output_dir = os.path.join(output_dir, task)
         os.makedirs(task_output_dir, exist_ok=True)
 
-        # Train and validate the model
-        if task_type == "classification":
-            train_losses, val_losses, train_accuracies, val_accuracies = \
-                train_model(model, criterion, optimizer, train_loader, val_loader, num_epochs, device,
-                                         task_output_dir, task, task_type)
-        else:
-            train_losses, val_losses = \
-                train_model(model, criterion, optimizer, train_loader, val_loader, num_epochs, device,
-                                         task_output_dir, task, task_type)
+        # Hyperparameter optimization and model training
+        best_val_accuracy = float('-inf')  # Initialize the best validation accuracy
+        best_config = None
+        best_model_path = None
+        all_results = []  # To store results of all configurations
+        for conf_idx, conf in enumerate(selected_configs):
+            # Map the configuration tuple to a dictionary
+            conf_dict = dict(zip(config_keys, conf))
+            print(f"Training with configuration {conf_idx + 1}: {conf_dict}")
 
-        # Save metrics
-        if task_type == "classification":
-            metrics = {
+            model = model_class(feat_dims=feat_dims, raw_dims=raw_dims,
+                                d_model_feat=conf_dict["d_model_feat"], d_model_raw=conf_dict["d_model_raw"],
+                                nhead=conf_dict["nhead"], num_layers_feat=conf_dict["num_layers_feat"],
+                                num_layers_raw=conf_dict["num_layers_raw"],
+                                dim_feedforward_feat=conf_dict["dim_feedforward_feat"],
+                                dim_feedforward_raw=conf_dict["dim_feedforward_raw"],
+                                dim_fc=conf_dict["dim_fc"], output_dim=output_dim, dropout=conf_dict["dropout"],
+                                activation=activation, norm=norm,
+                                freeze=freeze, task_type=conf_dict["task_type"]).to(device)
+            optimizer = torch.optim.Adam(model.parameters(), lr=conf_dict["learning_rate"])
+            if task_type == "classification":
+                if output_dim == 1:
+                    criterion = nn.BCEWithLogitsLoss()  # Binary classification
+                else:
+                    criterion = nn.CrossEntropyLoss()  # Multi-class classification
+            elif task_type == "regression":
+                criterion = nn.MSELoss()  # Mean Squared Error for regression
+            else:
+                raise ValueError("task_type should be 'classification' or 'regression'")
+
+            # Train and validate the model
+            if task_type == "classification":
+                train_losses, val_losses, train_accuracies, val_accuracies = \
+                    train_model(model, criterion, optimizer, train_loader, val_loader, conf_dict["num_epochs"], device,
+                                             task_output_dir, task, task_type)
+            else:
+                train_losses, val_losses = \
+                    train_model(model, criterion, optimizer, train_loader, val_loader, conf_dict["num_epochs"], device,
+                                             task_output_dir, task, task_type)
+
+            test_result = test_model(model, test_loader, device, task_type, conf_idx, task_output_dir)
+
+            # # Save validation and test results
+            # results.append({
+            #     "Configuration": conf_dict,
+            #     "Validation Loss": val_losses[-1],
+            #     "Validation Accuracy": val_accuracies[-1] if task_type == "classification" else None,
+            #     "Test Result": test_result
+            # })
+
+            # Save results for this configuration
+            result = {
+                "config": conf_dict,
                 "train_losses": train_losses,
                 "val_losses": val_losses,
-                "train_accuracies": train_accuracies,
-                "val_accuracies": val_accuracies
+                "train_accuracies": train_accuracies if task_type == "classification" else None,
+                "val_accuracies": val_accuracies if task_type == "classification" else None,
+                "test_result": test_result
             }
-        else:
-            metrics = {
-                "train_losses": train_losses,
-                "val_losses": val_losses
-            }
-        pd.DataFrame(metrics).to_csv(os.path.join(task_output_dir, "metrics.csv"), index=False)
+            all_results.append(result)
+
+            # Save the model for the current configuration
+            model_path = os.path.join(task_output_dir, f"model_task_{task}_conf{conf_idx}.pth")
+            torch.save(model.state_dict(), model_path)
+
+            # Check if this configuration is the best one
+            if task_type == "classification" and max(val_accuracies) > best_val_accuracy:
+                best_val_accuracy = max(val_accuracies)
+                best_config = conf_dict
+                best_model_path = model_path
+            elif task_type == "regression" and min(val_losses) < best_val_accuracy:
+                best_val_accuracy = min(val_losses)
+                best_config = conf_dict
+                best_model_path = model_path
+
+        # Save all results to a CSV file for analysis
+        results_path = os.path.join(task_output_dir, f"results_task_{task}.csv")
+        with open(results_path, "w", newline="") as csv_file:
+            writer = csv.writer(csv_file)
+            writer.writerow(["Configuration", "Train Losses", "Validation Losses", "Test Result", "Train Accuracies",
+                             "Validation Accuracies"])
+            for res in all_results:
+                writer.writerow([
+                    res["config"],
+                    res["train_losses"],
+                    res["val_losses"],
+                    res["test_result"],
+                    res["train_accuracies"] if task_type == "classification" else None,
+                    res["val_accuracies"] if task_type == "classification" else None,
+                ])
+        # Print the best configuration and test the best model
+        print(f"\nBest Configuration: {best_config}")
+        print(f"Best Model Path: {best_model_path}")
+
+        # # Save all results for this task
+        # results_file = os.path.join(task_output_dir, f"results_task_{task}.csv")
+        # with open(results_file, "w", newline="") as f:
+        #     writer = csv.DictWriter(f, fieldnames=["Configuration", "Validation Loss", "Validation Accuracy",
+        #                                            "Test Result"])
+        #     writer.writeheader()
+        #     for result in results:
+        #         writer.writerow(result)
+
+        # Reload the best model and test it on the test set again (to confirm results)
+        best_model = model_class(
+            feat_dims=feat_dims, raw_dims=raw_dims,
+            d_model_feat=best_config["d_model_feat"], d_model_raw=best_config["d_model_raw"],
+            nhead=best_config["nhead"], num_layers_feat=best_config["num_layers_feat"],
+            num_layers_raw=best_config["num_layers_raw"], dim_feedforward_feat=best_config["dim_feedforward_feat"],
+            dim_feedforward_raw=best_config["dim_feedforward_raw"], dim_fc=best_config["dim_fc"],
+            output_dim=output_dim, dropout=best_config["dropout"], activation=activation,
+            norm=norm, freeze=freeze, task_type=best_config["task_type"]
+        ).to(device)
+        best_model.load_state_dict(torch.load(best_model_path))
+
+        final_test_result = test_model(best_model, test_loader, device, task_output_dir,
+                                       task, task_type, conf_idx=None)
+        print(f"Final Test Result for Best Model: {final_test_result}")
+
+        # Save the final test result
+        final_test_result_path = os.path.join(task_output_dir, f"final_test_result_task_{task}.txt")
+        with open(final_test_result_path, "w") as f:
+            f.write(f"Best Configuration: {best_config}\n")
+            f.write(f"Final Test Result: {final_test_result}\n")
 
     print(f"Training completed for all tasks. Results saved in {output_dir}.")
     a = 0
@@ -911,11 +999,12 @@ dim_fc = args.dim_fc
 output_dim = 1  # Set to 1 for binary classification or regression; set to number of classes for multi-class classific
 dropout = args.dropout
 task_type = "classification"
+norm = "BatchNorm"
 
 num_epochs = args.n_epochs
 batch_size_train = args.train_batch_size
 batch_size_val = 64
-batch_size_test = 1
+batch_size_test = 16
 learning_rate = args.lr
 
 path_file = args.data_dir + "/raw_features_extracted"
@@ -989,32 +1078,29 @@ names_input = np.array(names_input)
 output_dir = args.output_dir
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+hyperparams = {"d_model_raw": d_model_raw, "d_model_feat": d_model_feat, "nhead": nhead,
+               "num_layers_feat": num_layers_feat, "num_layers_raw": num_layers_raw,
+               "dim_feedforward_feat": dim_feedforward_feat, "dim_feedforward_raw": dim_feedforward_raw,
+               "dim_fc": dim_fc, "dropout": dropout, "num_epochs": num_epochs,
+               "learning_rate": learning_rate, "task_type": task_type}
+
 train_model_multiple_tasks(
     dir_features=(dir_power, dir_hrv_t, dir_hrv_f),
     dir_raw=(dir_ecg, dir_eeg),
     names_input=names_input,
     target_file=dir_targets,
     model_class=MultiPathTransformerClassifier,
-    dim_fc=dim_fc,
     output_dir=output_dir,
     device=device,
-    num_epochs=num_epochs,  # Reduced epochs for faster testing
-    batch_size_train=8,
-    batch_size_val=128,
-    batch_size_test=1,
-    learning_rate=0.00001,
-    d_model_feat=d_model_feat,
-    d_model_raw=d_model_raw,
-    nhead=nhead,
-    num_layers_feat=num_layers_feat,
-    num_layers_raw=num_layers_raw,
-    dim_feedforward_feat=dim_feedforward_feat,
-    dim_feedforward_raw=dim_feedforward_raw,
+    hyperparams=hyperparams,
+    batch_size_train=batch_size_train,
+    batch_size_val=batch_size_val,
+    batch_size_test=batch_size_test,
     output_dim=output_dim,
-    dropout=dropout,
+    fold=args.fold,
     task_type=task_type,
     freeze=False,
     activation="relu",
-    norm="BatchNorm"
+    norm=norm
 )
 
