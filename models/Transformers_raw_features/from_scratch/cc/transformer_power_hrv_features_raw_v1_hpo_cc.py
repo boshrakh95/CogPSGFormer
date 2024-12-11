@@ -38,8 +38,8 @@ import csv
 import argparse
 import matplotlib.pyplot as plt
 import matplotlib
-# matplotlib.use('Agg')
-matplotlib.use('TkAgg')
+matplotlib.use('Agg')
+# matplotlib.use('TkAgg')
 
 torch.cuda.is_available()
 torch.cuda.empty_cache()
@@ -51,18 +51,18 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Training script')
     parser.add_argument('--data-dir', type=str, required=True, help='Path to the dataset directory')
     parser.add_argument('--output-dir', type=str, required=True, help='Path to the output directory')
-    parser.add_argument('--lr', type=float, required=True, help='learning rate')
-    parser.add_argument('--n-epochs', type=int, required=True, help='Number of epochs')
+    parser.add_argument('--lr', type=str, required=True, help='learning rate')
+    parser.add_argument('--n-epochs', type=str, required=True, help='Number of epochs')
     parser.add_argument('--train-batch-size', type=int, required=True, help='Training batch size')
-    parser.add_argument('--n-layers-raw', type=int, required=True, help='Number of layers for raw data paths')
-    parser.add_argument('--n-layers-feat', type=int, required=True, help='Number of layers for feature paths')
-    parser.add_argument('--d-model-raw', type=int, required=True, help='Model dimension for raw data')
-    parser.add_argument('--d-model-feat', type=int, required=True, help='Model dimension for features')
-    parser.add_argument('--dim-feedforward-raw', type=int, required=True, help='Feedforward dimension for raw data')
-    parser.add_argument('--dim-feedforward-feat', type=int, required=True, help='Feedforward dimension for features')
-    parser.add_argument('--n-heads', type=int, required=True, help='Number of heads in Transformer')
-    parser.add_argument('--dropout', type=float, required=True, help='Dropout rate in Transformer')
-    parser.add_argument('--dim-fc', type=int, required=True, help='Fully connected dimension in Transformer')
+    parser.add_argument('--n-layers-raw', type=str, required=True, help='Number of layers for raw data paths')
+    parser.add_argument('--n-layers-feat', type=str, required=True, help='Number of layers for feature paths')
+    parser.add_argument('--d-model-raw', type=str, required=True, help='Model dimension for raw data')
+    parser.add_argument('--d-model-feat', type=str, required=True, help='Model dimension for features')
+    parser.add_argument('--dim-feedforward-raw', type=str, required=True, help='Feedforward dimension for raw data')
+    parser.add_argument('--dim-feedforward-feat', type=str, required=True, help='Feedforward dimension for features')
+    parser.add_argument('--n-heads', type=str, required=True, help='Number of heads in Transformer')
+    parser.add_argument('--dropout', type=str, required=True, help='Dropout rate in Transformer')
+    parser.add_argument('--dim-fc', type=str, required=True, help='Fully connected dimension in Transformer')
     parser.add_argument('--fold', type=int, required=True, help='Fold number for cross-validation')
     return parser.parse_args()
 
@@ -773,8 +773,8 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
 
         ### For combining tasks
         # Define the two tasks you want to merge
-        task1 = ['pcet_concept_level_responses']
-        task2 = ['pvtb_errors_commission']
+        task1 = 'pcet_concept_level_responses'
+        task2 = 'pvtb_errors_commission'
         # Identify subjects with non-NaN values for both tasks
         names_task1 = names_target[~np.isnan(targets[task1])]
         names_task2 = names_target[~np.isnan(targets[task2])]
@@ -846,7 +846,7 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
         test_loader = DataLoader(test_dataset, batch_size=batch_size_test, shuffle=False)
 
         # Setup configurations for hyperparameter optimization
-        num_config = 5  # Number of configurations to try
+        num_config = 2  # Number of configurations to try
         random2.seed(42)
         all_configs = list(product(*hyperparams.values()))  # Generate all possible configurations
         config_keys = list(hyperparams.keys())
@@ -874,7 +874,7 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
                                 dim_feedforward_raw=conf_dict["dim_feedforward_raw"],
                                 dim_fc=conf_dict["dim_fc"], output_dim=output_dim, dropout=conf_dict["dropout"],
                                 activation=activation, norm=norm,
-                                freeze=freeze, task_type=conf_dict["task_type"]).to(device)
+                                freeze=freeze, task_type=task_type).to(device)
             optimizer = torch.optim.Adam(model.parameters(), lr=conf_dict["learning_rate"])
             if task_type == "classification":
                 if output_dim == 1:
@@ -988,26 +988,26 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
 args = parse_args()
 
 # Hyperparameters and Data Preparation
-d_model_raw = args.d_model_raw
-d_model_feat = args.d_model_feat
-nhead = args.n_heads
-num_layers_feat = args.n_layers_feat
-num_layers_raw = args.n_layers_raw
-dim_feedforward_feat = args.dim_feedforward_feat
-dim_feedforward_raw = args.dim_feedforward_raw
-dim_fc = args.dim_fc
+d_model_raw = [int(x) for x in args.d_model_raw.split()]
+d_model_feat = [int(x) for x in args.d_model_feat.split()]
+nhead = [int(x) for x in args.n_heads.split()]
+num_layers_feat = [int(x) for x in args.n_layers_feat.split()]
+num_layers_raw = [int(x) for x in args.n_layers_raw.split()]
+dim_feedforward_feat = [int(x) for x in args.dim_feedforward_feat.split()]
+dim_feedforward_raw = [int(x) for x in args.dim_feedforward_raw.split()]
+dim_fc = [int(x) for x in args.dim_fc.split()]
 output_dim = 1  # Set to 1 for binary classification or regression; set to number of classes for multi-class classific
-dropout = args.dropout
+dropout = [float(x) for x in args.dropout.split()]
 task_type = "classification"
 norm = "BatchNorm"
 
-num_epochs = args.n_epochs
+num_epochs = [int(x) for x in args.n_epochs.split()]
 batch_size_train = args.train_batch_size
 batch_size_val = 64
 batch_size_test = 16
-learning_rate = args.lr
+learning_rate = [float(x) for x in args.lr.split()]
 
-path_file = args.data_dir + "/raw_features_extracted"
+path_file = args.data_dir + "/stages_raw_features_extracted_v1"
 print(args)
 print(path_file)
 
@@ -1082,7 +1082,7 @@ hyperparams = {"d_model_raw": d_model_raw, "d_model_feat": d_model_feat, "nhead"
                "num_layers_feat": num_layers_feat, "num_layers_raw": num_layers_raw,
                "dim_feedforward_feat": dim_feedforward_feat, "dim_feedforward_raw": dim_feedforward_raw,
                "dim_fc": dim_fc, "dropout": dropout, "num_epochs": num_epochs,
-               "learning_rate": learning_rate, "task_type": task_type}
+               "learning_rate": learning_rate}
 
 train_model_multiple_tasks(
     dir_features=(dir_power, dir_hrv_t, dir_hrv_f),
