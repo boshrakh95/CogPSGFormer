@@ -270,7 +270,8 @@ class MyDataset(Dataset):
         self.subset = subset
         self.targets = targets
         self.stats = stats
-        print('number of subjects in the ', subset, 'set: ', str(len(self.subj_indexes)))
+        if self.stats:
+            print('number of subjects in the ', subset, 'set: ', str(len(self.subj_indexes)))
 
         # Read the feature files
         self.X_power = torch.tensor(np.load(self.dir_power), dtype=torch.float32)
@@ -524,11 +525,14 @@ def test_model(model, test_loader, device, task_output_dir, task,
                 if model.output_dim == 1:
                     # Binary classification
                     predicted = (torch.sigmoid(outputs) >= 0.5).float()
+                    print(f"Sigmoid outputs: {torch.sigmoid(outputs).squeeze()}")  # Debug print
                 else:
                     # Multi-class classification
                     _, predicted = torch.max(outputs, 1)  # Get the index of the max logit
                 correct += (predicted == labels).sum().item()
                 total += labels.size(0)
+                print("correct:", (predicted == labels).sum().item())
+                print("total:", labels.size(0))
                 all_predictions.extend(predicted.cpu().numpy())
                 all_labels.extend(labels.cpu().numpy())
             elif task_type == "regression":
@@ -548,6 +552,7 @@ def test_model(model, test_loader, device, task_output_dir, task,
     if task_type == "classification":
         accuracy = 100 * correct / total
         print(f"Test Accuracy for Configuration {conf_idx}: {accuracy:.2f}%")
+        print(f"Correct: {correct}, Total: {total}")  # Debugging
         return accuracy
     elif task_type == "regression":
         mean_squared_error = test_loss / total
@@ -771,6 +776,13 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
         # # Indices of subjects retained for this task in the input data
         # valid_indices = np.where(np.isin(names_input, subj_to_ret))[0]
 
+        def classify_with_nan(data, threshold):
+            return np.where(
+                np.isnan(data),  # Check for NaN
+                np.nan,  # Preserve NaN
+                (data >= threshold).astype(int)  # Classification
+            )
+
         ### For combining tasks
         # Define the two tasks you want to merge
         task1 = 'pcet_concept_level_responses'
@@ -789,6 +801,7 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
         y_task1 = targets_filtered[task1].to_numpy()
         y_task2 = targets_filtered[task2].to_numpy()
         y_task = y_task1 - y_task2  # Summed target values
+        y_task = classify_with_nan(y_task, np.nanmedian(y_task))  # Classification threshold
         # Indices of subjects retained for this merged task in the input data
         valid_indices = np.where(np.isin(names_input, subj_to_ret))[0]
         ### End of combining tasks
@@ -800,7 +813,7 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
         # Find the indexes of the train, val, and test data
         cohort_size = len(y_task)
         n_splits = 10  # Number of splits for cross-validation
-        val_size = 0.2  # 20% of train+validation data for validation
+        val_size = 0.15  # 20% of train+validation data for validation
         fold_size = cohort_size // n_splits
         test_start = fold * fold_size
         test_end = test_start + fold_size if fold < n_splits - 1 else cohort_size
@@ -846,7 +859,7 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
         test_loader = DataLoader(test_dataset, batch_size=batch_size_test, shuffle=False)
 
         # Setup configurations for hyperparameter optimization
-        num_config = 2  # Number of configurations to try
+        num_config = 1  # Number of configurations to try
         random2.seed(42)
         all_configs = list(product(*hyperparams.values()))  # Generate all possible configurations
         config_keys = list(hyperparams.keys())
@@ -896,7 +909,7 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
                     train_model(model, criterion, optimizer, train_loader, val_loader, conf_dict["num_epochs"], device,
                                              task_output_dir, task, task_type)
 
-            test_result = test_model(model, test_loader, device, task_type, conf_idx, task_output_dir)
+            test_result = test_model(model, test_loader, device, task_output_dir, task, task_type, conf_idx)
 
             # # Save validation and test results
             # results.append({
@@ -967,7 +980,7 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
             num_layers_raw=best_config["num_layers_raw"], dim_feedforward_feat=best_config["dim_feedforward_feat"],
             dim_feedforward_raw=best_config["dim_feedforward_raw"], dim_fc=best_config["dim_fc"],
             output_dim=output_dim, dropout=best_config["dropout"], activation=activation,
-            norm=norm, freeze=freeze, task_type=best_config["task_type"]
+            norm=norm, freeze=freeze, task_type=task_type
         ).to(device)
         best_model.load_state_dict(torch.load(best_model_path))
 
@@ -1013,7 +1026,7 @@ print(path_file)
 
 # path_file = "/media/livia/Elements/public_sleep_data/stages/stages/original/STAGES_PSGs"
 path_save = path_file + "/yasa_eeg_powers"
-dir_targets = path_save + "/all_scores_classification_for_yasa_c3_eeg_rel_power_analysis.csv"
+dir_targets = path_save + "/all_scores_regression_for_yasa_c3_eeg_rel_power_analysis.csv"
 dir_ecg = sorted(glob2.glob(path_file + '/PSGs/[!p]*/ecg_segmented_2min/*'))
 dir_eeg = sorted(glob2.glob(path_file + '/PSGs/[!p]*/eeg_segmented_30sec/*'))
 
