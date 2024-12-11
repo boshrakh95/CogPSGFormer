@@ -515,11 +515,13 @@ def test_model(model, test_loader, device, task_output_dir, task,
             x_ecg = batch['ecg'].to(device)
             x_eeg = batch['eeg'].to(device)
             labels = batch['label'].to(device)
+            print("labels shape:", labels.shape)  # Debug print
 
             x_power, x_time_hrv, x_freq_hrv, x_ecg, x_eeg = map(lambda x: x.float(),
                                                                 [x_power, x_time_hrv, x_freq_hrv, x_ecg, x_eeg])
 
             outputs = model(x_time_hrv, x_freq_hrv, x_power, x_ecg, x_eeg)
+            print("outputs shape:", outputs.shape)  # Debug print
 
             if task_type == "classification":
                 if model.output_dim == 1:
