@@ -515,7 +515,6 @@ def test_model(model, test_loader, device, task_output_dir, task,
             x_ecg = batch['ecg'].to(device)
             x_eeg = batch['eeg'].to(device)
             labels = batch['label'].to(device)
-            print("labels shape:", labels.shape)  # Debug print
 
             x_power, x_time_hrv, x_freq_hrv, x_ecg, x_eeg = map(lambda x: x.float(),
                                                                 [x_power, x_time_hrv, x_freq_hrv, x_ecg, x_eeg])
@@ -526,11 +525,13 @@ def test_model(model, test_loader, device, task_output_dir, task,
             if task_type == "classification":
                 if model.output_dim == 1:
                     # Binary classification
-                    predicted = (torch.sigmoid(outputs) >= 0.5).float()
-                    print(f"Sigmoid outputs: {torch.sigmoid(outputs).squeeze()}")  # Debug print
+                    predicted = (torch.sigmoid(outputs) >= 0.5).float().squeeze(-1)
+                    # print(f"Sigmoid outputs: {torch.sigmoid(outputs).squeeze()}")  # Debug print
                 else:
                     # Multi-class classification
                     _, predicted = torch.max(outputs, 1)  # Get the index of the max logit
+                print("predicted shape:", predicted.shape)  # Debug print
+                print("labels shape:", labels.shape)  # Debug print
                 correct += (predicted == labels).sum().item()
                 total += labels.size(0)
                 print("correct:", (predicted == labels).sum().item())
