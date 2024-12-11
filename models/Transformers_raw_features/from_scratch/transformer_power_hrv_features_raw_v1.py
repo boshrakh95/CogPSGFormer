@@ -22,6 +22,7 @@ from torch import nn, Tensor
 from torch.nn import functional as F
 from torch.utils.data import DataLoader, Dataset
 from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, roc_curve, auc
 import numpy as np
 import glob2
@@ -464,7 +465,7 @@ def train_model(model, criterion, optimizer, train_loader, val_loader, num_epoch
     plt.tight_layout()
     # plt.show()
     learning_curve_path = os.path.join(task_output_dir, "learning_curves_task_" + task + ".png")
-    plt.savefig(learning_curve_path)
+    # plt.savefig(learning_curve_path)
     plt.close()
 
     if task_type == "classification":
@@ -473,22 +474,29 @@ def train_model(model, criterion, optimizer, train_loader, val_loader, num_epoch
         return train_losses, val_losses
 
 
-# EDIT for multiple tasks and added raw data
-def test_model(model, test_loader, device, task_type="classification"):
+def test_model(model, test_loader, device,
+               task_type="classification", conf_idx=None):
 
     model.eval()
     correct = 0
     total = 0
     test_loss = 0
+    all_predictions = []
+    all_labels = []
 
     with torch.no_grad():
         for batch in test_loader:
-            power_features = batch['power'].to(device)
-            hrv_time_features = batch['hrv_time'].to(device)
-            hrv_freq_features = batch['hrv_freq'].to(device)
+            x_power = batch['power'].to(device)
+            x_time_hrv = batch['hrv_time'].to(device)
+            x_freq_hrv = batch['hrv_freq'].to(device)
+            x_ecg = batch['ecg'].to(device)
+            x_eeg = batch['eeg'].to(device)
             labels = batch['label'].to(device)
 
-            outputs = model(power_features, hrv_time_features, hrv_freq_features)
+            x_power, x_time_hrv, x_freq_hrv, x_ecg, x_eeg = map(lambda x: x.float(),
+                                                                [x_power, x_time_hrv, x_freq_hrv, x_ecg, x_eeg])
+
+            outputs = model(x_time_hrv, x_freq_hrv, x_power, x_ecg, x_eeg)
 
             if task_type == "classification":
                 if model.output_dim == 1:
@@ -499,18 +507,29 @@ def test_model(model, test_loader, device, task_type="classification"):
                     _, predicted = torch.max(outputs, 1)  # Get the index of the max logit
                 correct += (predicted == labels).sum().item()
                 total += labels.size(0)
+                all_predictions.extend(predicted.cpu().numpy())
+                all_labels.extend(labels.cpu().numpy())
             elif task_type == "regression":
                 # For regression, you can compute test loss if a criterion is provided
                 test_loss += F.mse_loss(outputs.squeeze(), labels.float(), reduction='sum').item()  # Example loss calculation
+                all_predictions.extend(outputs.squeeze().cpu().numpy())
+                all_labels.extend(labels.cpu().numpy())
+
+    # Save test results
+    # results_path = os.path.join(task_output_dir, f"test_results_task{task}_conf{conf_idx}.csv")
+    # with open(results_path, "w") as f:
+    #     writer = csv.writer(f)
+    #     writer.writerow(["True Label", "Prediction"])
+    #     for label, pred in zip(all_labels, all_predictions):
+    #         writer.writerow([label, pred])
 
     if task_type == "classification":
         accuracy = 100 * correct / total
-        print(f'Test Accuracy: {accuracy:.2f}%')
+        print(f"Test Accuracy for Configuration {conf_idx}: {accuracy:.2f}%")
         return accuracy
     elif task_type == "regression":
-        # Compute Mean Squared Error for regression
         mean_squared_error = test_loss / total
-        print(f'Test Mean Squared Error: {mean_squared_error:.4f}')
+        print(f"Test MSE for Configuration {conf_idx}: {mean_squared_error:.4f}")
         return mean_squared_error
 
 
@@ -658,9 +677,9 @@ def compute_zscore_stat(train_dataset):
     eeg_mean = eeg_sum / (n_samples * eeg.size)
     eeg_std = np.sqrt((eeg_sum_sq / (n_samples * eeg.size)) - eeg_mean ** 2)
 
-    power = np.array(power_list)
-    hrv_t = np.array(hrv_t_list)
-    hrv_f = np.array(hrv_f_list)
+    power = np.array([elem.numpy() for elem in power_list])
+    hrv_t = np.array([elem.numpy() for elem in hrv_t_list])
+    hrv_f = np.array([elem.numpy() for elem in hrv_f_list])
     power = power.reshape(-1, power.shape[-1])  # Shape: (num_samples_train * num_timesteps, num_features)
     hrv_t = hrv_t.reshape(-1, hrv_t.shape[-1])
     hrv_f = hrv_f.reshape(-1, hrv_f.shape[-1])
@@ -722,63 +741,85 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
     for task in tasks:
         print(f"Training for task: {task}")
 
-        # Get ids of subjects without nan for this task
-        names_this_task = names_target[~np.isnan(targets[task])]
-        # Ids of subjects that are in both the input and target data
-        subj_to_ret = np.intersect1d(names_input, names_this_task)
-        # Get target values for the subjects retained
-        targets1 = targets[targets['subject_id'].isin(subj_to_ret)]
-        # Extract the target values for the current task
-        y_task = targets1[task].to_numpy()
-        # Indices of subjects retained for this task in the input data
-        valid_indices = np.where(np.isin(names_input, subj_to_ret))[0]
-
-        # ### For combining tasks
-        # # Define the two tasks you want to merge
-        # task1 = tasks[0]  # Replace with the name of the first task
-        # task2 = tasks[1]  # Replace with the name of the second task
-        # # Identify subjects with non-NaN values for both tasks
-        # names_task1 = names_target[~np.isnan(targets[task1])]
-        # names_task2 = names_target[~np.isnan(targets[task2])]
-        # # Ids of subjects that are in both the input and target data for both tasks
-        # subj_to_ret_task1 = np.intersect1d(names_input, names_task1)
-        # subj_to_ret_task2 = np.intersect1d(names_input, names_task2)
-        # # Retain only subjects that have values for both tasks
-        # subj_to_ret = np.intersect1d(subj_to_ret_task1, subj_to_ret_task2)
+        # # Get ids of subjects without nan for this task
+        # names_this_task = names_target[~np.isnan(targets[task])]
+        # # Ids of subjects that are in both the input and target data
+        # subj_to_ret = np.intersect1d(names_input, names_this_task)
         # # Get target values for the subjects retained
-        # targets_filtered = targets[targets['subject_id'].isin(subj_to_ret)]
-        # # Extract and merge the target values for the two tasks by summing them
-        # y_task1 = targets_filtered[task1].to_numpy()
-        # y_task2 = targets_filtered[task2].to_numpy()
-        # y_task = y_task1 - y_task2  # Summed target values
-        # # Indices of subjects retained for this merged task in the input data
+        # targets1 = targets[targets['subject_id'].isin(subj_to_ret)]
+        # # Extract the target values for the current task
+        # y_task = targets1[task].to_numpy()
+        # # Indices of subjects retained for this task in the input data
         # valid_indices = np.where(np.isin(names_input, subj_to_ret))[0]
-        # ### End of combining tasks
 
-        # compare subjs in target file and raw data dir (to see if you can use "valid_indices" for raw data)
+        ### For combining tasks
+        # Define the two tasks you want to merge
+        task1 = tasks[0]  # Replace with the name of the first task
+        task2 = tasks[1]  # Replace with the name of the second task
+        # Identify subjects with non-NaN values for both tasks
+        names_task1 = names_target[~np.isnan(targets[task1])]
+        names_task2 = names_target[~np.isnan(targets[task2])]
+        # Ids of subjects that are in both the input and target data for both tasks
+        subj_to_ret_task1 = np.intersect1d(names_input, names_task1)
+        subj_to_ret_task2 = np.intersect1d(names_input, names_task2)
+        # Retain only subjects that have values for both tasks
+        subj_to_ret = np.intersect1d(subj_to_ret_task1, subj_to_ret_task2)
+        # Get target values for the subjects retained
+        targets_filtered = targets[targets['subject_id'].isin(subj_to_ret)]
+        # Extract and merge the target values for the two tasks by summing them
+        y_task1 = targets_filtered[task1].to_numpy()
+        y_task2 = targets_filtered[task2].to_numpy()
+        y_task = y_task1 - y_task2  # Summed target values
+
+        def classify_with_nan(data, threshold):
+            return np.where(
+                np.isnan(data),  # Check for NaN
+                np.nan,  # Preserve NaN
+                (data >= threshold).astype(int)  # Classification
+            )
+        y_task = classify_with_nan(y_task, np.nanmedian(y_task))  # Classification threshold
+        # Indices of subjects retained for this merged task in the input data
+        valid_indices = np.where(np.isin(names_input, subj_to_ret))[0]
+        ### End of combining tasks
 
         # Modify raw data directories to include only the subjects retained for this task
         dir_raw_mod = tuple([[lst[i] for i in valid_indices] for lst in dir_raw])
 
-        # Split data into train/val/test sets (1 subject test, ~80% train, ~20% val)
-        # Find the indexes of the train, val, and test data
-        fold = 1
+        # Split data into train/val/test sets (1/10 test, 9/10 train + val, 85% train, 15% val)
+        fold = 0
         cohort_size = len(y_task)
-        all_subjs = list(range(cohort_size))
-        test_subj = [fold - 1]  # works only for the 1st fold, modify for other folds
-        # Update the outlier list (remove potential test subjects)
-        subj_indexes1 = [element for element in all_subjs if element not in test_subj]
+        n_splits = 10  # Number of splits for cross-validation
+        val_size = 0.15  # 15% of train+validation data for validation
+        fold_size = cohort_size // n_splits
+        test_start = fold * fold_size
+        test_end = test_start + fold_size if fold < n_splits - 1 else cohort_size
+        # Test indices
+        test_subj = np.arange(test_start, test_end)
+        # Remaining indices for train+validation
+        train_val_indices = np.concatenate([np.arange(0, test_start), np.arange(test_end, cohort_size)])
+        # Split train+validation into train and validation
+        train_subj, val_subj = train_test_split(
+            train_val_indices, test_size=val_size, random_state=fold, shuffle=True)
 
-        # 80% of the subjects used for train
-        train_size = int(80 * len(subj_indexes1) / 100)
-        # the rest 20% of the subjects used for validation
-        val_size = len(subj_indexes1) - train_size
-
-        # Extract the train data subject indexes
-        random2.seed(123)
-        train_subj = random2.sample(subj_indexes1, train_size)
-        # Extract the validation data subject indexes (remaining subjects)
-        val_subj = [element for element in subj_indexes1 if element not in train_subj]
+        # # Split data into train/val/test sets (1 subject test, ~80% train, ~20% val)
+        # # Find the indexes of the train, val, and test data
+        # fold = 1
+        # cohort_size = len(y_task)
+        # all_subjs = list(range(cohort_size))
+        # test_subj = [fold - 1]  # works only for the 1st fold, modify for other folds
+        # # Update the outlier list (remove potential test subjects)
+        # subj_indexes1 = [element for element in all_subjs if element not in test_subj]
+        #
+        # # 80% of the subjects used for train
+        # train_size = int(80 * len(subj_indexes1) / 100)
+        # # the rest 20% of the subjects used for validation
+        # val_size = len(subj_indexes1) - train_size
+        #
+        # # Extract the train data subject indexes
+        # random2.seed(123)
+        # train_subj = random2.sample(subj_indexes1, train_size)
+        # # Extract the validation data subject indexes (remaining subjects)
+        # val_subj = [element for element in subj_indexes1 if element not in train_subj]
 
         # Create PyTorch datasets and loaders
         train_dataset = MyDataset(dir_raw_mod, dir_features, y_task, valid_indices, train_subj, 'train')
@@ -786,6 +827,7 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
         feat_dims = (train_dataset.X_hrv_t.shape[-1], train_dataset.X_hrv_f.shape[-1], train_dataset.X_power.shape[-1])
         raw_dims = (train_dataset[0]['ecg'].shape[-1], train_dataset[0]['eeg'].shape[-1])
         # stats = compute_zscore_stat(train_dataset)
+        # with open(f"stats/10fold/stats_fold{fold+1}.csv", "w", newline="") as csv_file:
         # with open("stats/stats.csv", "w", newline="") as csv_file:
         #     writer = csv.writer(csv_file)
         #     for key, value in stats.items():
@@ -795,6 +837,7 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
         #             writer.writerow([key, value])
         # Load stats.csv (computed and saved in the previous step)
         stats = {}
+        # with open(f"stats/10fold/stats_fold{fold + 1}.csv", "r") as csv_file:
         with open("stats/stats.csv", "r") as csv_file:
             reader = csv.reader(csv_file)
             for row in reader:
@@ -805,17 +848,11 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
         val_dataset = MyDataset(dir_raw_mod, dir_features, y_task, valid_indices, val_subj, 'val', stats)
         test_dataset = MyDataset(dir_raw_mod, dir_features, y_task, valid_indices, test_subj, 'test', stats)
 
-        # X_power_train, X_hrv_t_train, X_hrv_f_train, dir_ecg_mod, dir_eeg_mod, y_train)
-        # val_dataset = MyDataset(X_power_val, X_hrv_t_val, X_hrv_f_val, dir_ecg_mod, dir_eeg_mod, y_val)
-        # test_dataset = MyDataset(X_power_test, X_hrv_t_test, X_hrv_f_test, dir_ecg_mod, dir_eeg_mod, y_test)
-
         train_loader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True)
         val_loader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=False)
         test_loader = DataLoader(test_dataset, batch_size=batch_size_test, shuffle=False)
 
         # Initialize model, optimizer, and loss function
-        # feat_dims = (X_power_train.shape[-1], X_hrv_t_train.shape[-1], X_hrv_f_train.shape[-1])
-        # raw_dims = (X_ecg_train.shape[-1], X_eeg_train.shape[-1])
         model = model_class(feat_dims=feat_dims, raw_dims=raw_dims, d_model_feat=d_model_feat, d_model_raw=d_model_raw,
                             nhead=nhead, num_layers_feat=num_layers_feat, num_layers_raw=num_layers_raw,
                             dim_feedforward_feat=dim_feedforward_feat, dim_feedforward_raw=dim_feedforward_raw,
@@ -845,6 +882,8 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
             train_losses, val_losses = \
                 train_model(model, criterion, optimizer, train_loader, val_loader, num_epochs, device,
                                          task_output_dir, task, task_type)
+
+        res = test_model(model, test_loader, device, task_type)  # for debugging the cc code (transformer_power_hrv_features_raw_v1_hpo_cc.py)
 
         # Save metrics
         if task_type == "classification":
@@ -886,7 +925,7 @@ learning_rate = 0.0001
 
 path_file = "/media/livia/Elements/public_sleep_data/stages/stages/original/STAGES_PSGs"
 path_save = "/media/livia/Elements/public_sleep_data/stages/stages/original/yasa_eeg_powers"
-dir_targets = path_save + "/all_scores_classification_for_yasa_c3_eeg_rel_power_analysis.csv"
+dir_targets = path_save + "/all_scores_regression_for_yasa_c3_eeg_rel_power_analysis.csv"
 dir_ecg = sorted(glob2.glob(path_file + '/[!p]*/yasa_outputs/ecg_segmented_2min/*'))
 dir_eeg = sorted(glob2.glob(path_file + '/[!p]*/yasa_outputs/eeg_segmented_30sec/*'))
 
