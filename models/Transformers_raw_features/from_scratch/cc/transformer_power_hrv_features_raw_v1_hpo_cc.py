@@ -1,12 +1,11 @@
-#
+# -*- coding: utf-8 -*-
+# @Time    : start 6 Dec, last modification 12 Dec 2024
+# @Author  : Boshra
+
 # fixed transformer arch, EEG(c3-m2) powers of 6 bands + ECG time/freq HRV features over time + raw ECG/EEG signals
 # Dataset: neurokit_hrv_params_f.npy, neurokit_hrv_params_t.npy, yasa_c3_eeg_rel_powers.npy
 # : created in "test_rnn_power_hrv.py" from
 #                                processed in "process_augmented1_dataset.py"
-#
-# -*- coding: utf-8 -*-
-# @Time    : start 6 Dec, last modification 12 Dec 2024
-# @Author  : Boshra
 
 # Data formed from STAGES data (clinics with similar channels and subjects with nback results and valid signals),
 # possible targets: 'pcet_concept_level_responses', 'pvtb_errors_commission', or the sum of the two
