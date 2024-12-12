@@ -4,16 +4,20 @@
 # : created in "test_rnn_power_hrv.py" from
 #                                processed in "process_augmented1_dataset.py"
 #
+# -*- coding: utf-8 -*-
+# @Time    : start 6 Dec, last modification 12 Dec 2024
+# @Author  : Boshra
+
 # Data formed from STAGES data (clinics with similar channels and subjects with nback results and valid signals),
-# 735 individuals,
-# possible targets: nback impulsivity (false positive)
+# possible targets: 'pcet_concept_level_responses', 'pvtb_errors_commission', or the sum of the two
 # no demographics (should be prepared)
 # no sleep stages (insensible sleep stage score and synchronization problems should be resolved)
 # attention mask: don't use, artifact mask already applied
-# 10fold-CV: Fold1 (note: train, val, and test data are separated based on subjects)
-# original data of one subject: test data
+# 10fold-CV, (note: train, val, and test data are separated based on subjects)
+# Fold number is passed as an argument, with hyperparameter optimization, search space is passed as an argument
 
-# 6 Dec 2024
+# TODO: add other evaluation metrics with their plots (ROC curve, confusion matrix, etc.)
+
 
 # from typing import Optional, Any
 import math
@@ -515,26 +519,27 @@ def test_model(model, test_loader, device, task_output_dir, task,
             x_ecg = batch['ecg'].to(device)
             x_eeg = batch['eeg'].to(device)
             labels = batch['label'].to(device)
-            print("labels shape:", labels.shape)  # Debug print
 
             x_power, x_time_hrv, x_freq_hrv, x_ecg, x_eeg = map(lambda x: x.float(),
                                                                 [x_power, x_time_hrv, x_freq_hrv, x_ecg, x_eeg])
 
             outputs = model(x_time_hrv, x_freq_hrv, x_power, x_ecg, x_eeg)
-            print("outputs shape:", outputs.shape)  # Debug print
+            # print("outputs shape:", outputs.shape)  # Debug print
 
             if task_type == "classification":
                 if model.output_dim == 1:
                     # Binary classification
-                    predicted = (torch.sigmoid(outputs) >= 0.5).float()
-                    print(f"Sigmoid outputs: {torch.sigmoid(outputs).squeeze()}")  # Debug print
+                    predicted = (torch.sigmoid(outputs) >= 0.5).float().squeeze(-1)
+                    # print(f"Sigmoid outputs: {torch.sigmoid(outputs).squeeze()}")  # Debug print
                 else:
                     # Multi-class classification
                     _, predicted = torch.max(outputs, 1)  # Get the index of the max logit
+                # print("predicted shape:", predicted.shape)  # Debug print
+                # print("labels shape:", labels.shape)  # Debug print
                 correct += (predicted == labels).sum().item()
                 total += labels.size(0)
-                print("correct:", (predicted == labels).sum().item())
-                print("total:", labels.size(0))
+                # print("correct:", (predicted == labels).sum().item())
+                # print("total:", labels.size(0))
                 all_predictions.extend(predicted.cpu().numpy())
                 all_labels.extend(labels.cpu().numpy())
             elif task_type == "regression":
@@ -811,11 +816,11 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
         # Modify raw data directories to include only the subjects retained for this task
         dir_raw_mod = tuple([[lst[i] for i in valid_indices] for lst in dir_raw])
 
-        # Split data into train/val/test sets (1/10 test, 9/10 train + val, 80% train, 20% val)
+        # Split data into train/val/test sets (1/10 test, 9/10 train + val, 85% train, 15% val)
         # Find the indexes of the train, val, and test data
         cohort_size = len(y_task)
         n_splits = 10  # Number of splits for cross-validation
-        val_size = 0.15  # 20% of train+validation data for validation
+        val_size = 0.15  # 15% of train+validation data for validation
         fold_size = cohort_size // n_splits
         test_start = fold * fold_size
         test_end = test_start + fold_size if fold < n_splits - 1 else cohort_size
@@ -861,7 +866,7 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
         test_loader = DataLoader(test_dataset, batch_size=batch_size_test, shuffle=False)
 
         # Setup configurations for hyperparameter optimization
-        num_config = 1  # Number of configurations to try
+        num_config = 10  # Number of configurations to try
         random2.seed(42)
         all_configs = list(product(*hyperparams.values()))  # Generate all possible configurations
         config_keys = list(hyperparams.keys())
@@ -964,15 +969,6 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
         # Print the best configuration and test the best model
         print(f"\nBest Configuration: {best_config}")
         print(f"Best Model Path: {best_model_path}")
-
-        # # Save all results for this task
-        # results_file = os.path.join(task_output_dir, f"results_task_{task}.csv")
-        # with open(results_file, "w", newline="") as f:
-        #     writer = csv.DictWriter(f, fieldnames=["Configuration", "Validation Loss", "Validation Accuracy",
-        #                                            "Test Result"])
-        #     writer.writeheader()
-        #     for result in results:
-        #         writer.writerow(result)
 
         # Reload the best model and test it on the test set again (to confirm results)
         best_model = model_class(
