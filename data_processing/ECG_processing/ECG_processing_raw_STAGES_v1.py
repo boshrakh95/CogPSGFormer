@@ -1,5 +1,5 @@
 
-# Process and save ECG HRV features from the STAGES dataset
+# Process and save raw ECG from the STAGES dataset
 # Sleep stages not considered (still do not have reliable hypnograms)
 # 30 Oct 2024
 # Boshra
