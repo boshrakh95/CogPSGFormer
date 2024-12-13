@@ -360,7 +360,7 @@ class MyDataset(Dataset):
 
 
 def train_model(model, criterion, optimizer, train_loader, val_loader, num_epochs, device,
-                task_output_dir, task, task_type="classification", conf_idx=None):
+                task_output_dir, fold_dir, task, task_type="classification", conf_idx=None, fold=None):
 
     model.to(device)
 
@@ -492,7 +492,7 @@ def train_model(model, criterion, optimizer, train_loader, val_loader, num_epoch
 
     plt.tight_layout()
     # plt.show()
-    learning_curve_path = os.path.join(task_output_dir, "learning_curves_task_" + task + f"_conf{conf_idx}.png")
+    learning_curve_path = os.path.join(fold_dir, f"learning_curves_task_{task}_fold{fold}_conf{conf_idx}.png")
     plt.savefig(learning_curve_path)
     plt.close()
 
@@ -502,8 +502,8 @@ def train_model(model, criterion, optimizer, train_loader, val_loader, num_epoch
         return train_losses, val_losses
 
 
-def test_model(model, test_loader, device, task_output_dir, task,
-               task_type="classification", conf_idx=None):
+def test_model(model, test_loader, device, task_output_dir, fold_dir, task,
+               task_type="classification", conf_idx=None, fold=None):
 
     model.eval()
     correct = 0
@@ -550,7 +550,7 @@ def test_model(model, test_loader, device, task_output_dir, task,
                 all_labels.extend(labels.cpu().numpy())
 
     # Save test results
-    results_path = os.path.join(task_output_dir, f"test_results_task{task}_conf{conf_idx}.csv")
+    results_path = os.path.join(fold_dir, f"test_results_task_{task}_fold{fold}_conf{conf_idx}.csv")
     with open(results_path, "w") as f:
         writer = csv.writer(f)
         writer.writerow(["True Label", "Prediction"])
@@ -876,6 +876,8 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
         # Dir for saving the results
         task_output_dir = os.path.join(output_dir, task)
         os.makedirs(task_output_dir, exist_ok=True)
+        fold_dir = os.path.join(task_output_dir, f"fold{fold}")
+        os.makedirs(fold_dir, exist_ok=True)
 
         # Hyperparameter optimization and model training
         best_val_accuracy = float('-inf')  # Initialize the best validation accuracy
@@ -911,13 +913,14 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
             if task_type == "classification":
                 train_losses, val_losses, train_accuracies, val_accuracies = \
                     train_model(model, criterion, optimizer, train_loader, val_loader, conf_dict["num_epochs"], device,
-                                             task_output_dir, task, task_type)
+                                task_output_dir, fold_dir, task, task_type, conf_idx, fold)
             else:
                 train_losses, val_losses = \
                     train_model(model, criterion, optimizer, train_loader, val_loader, conf_dict["num_epochs"], device,
-                                             task_output_dir, task, task_type)
+                                task_output_dir, fold_dir, task, task_type, conf_idx, fold)
 
-            test_result = test_model(model, test_loader, device, task_output_dir, task, task_type, conf_idx)
+            test_result = test_model(model, test_loader, device, task_output_dir, fold_dir, task, task_type, conf_idx,
+                                     fold)
 
             # # Save validation and test results
             # results.append({
@@ -939,7 +942,7 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
             all_results.append(result)
 
             # Save the model for the current configuration
-            model_path = os.path.join(task_output_dir, f"model_task_{task}_conf{conf_idx}.pth")
+            model_path = os.path.join(fold_dir, f"model_task_{task}_fold{fold}_conf{conf_idx}.pth")
             torch.save(model.state_dict(), model_path)
 
             # Check if this configuration is the best one
@@ -953,7 +956,7 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
                 best_model_path = model_path
 
         # Save all results to a CSV file for analysis
-        results_path = os.path.join(task_output_dir, f"results_task_{task}.csv")
+        results_path = os.path.join(fold_dir, f"results_task_{task}_fold{fold}.csv")
         with open(results_path, "w", newline="") as csv_file:
             writer = csv.writer(csv_file)
             writer.writerow(["Configuration", "Train Losses", "Validation Losses", "Test Result", "Train Accuracies",
@@ -983,17 +986,17 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
         ).to(device)
         best_model.load_state_dict(torch.load(best_model_path))
 
-        final_test_result = test_model(best_model, test_loader, device, task_output_dir,
-                                       task, task_type, conf_idx=None)
+        final_test_result = test_model(best_model, test_loader, device, task_output_dir, fold_dir,
+                                       task, task_type, conf_idx=None, fold=fold)
         print(f"Final Test Result for Best Model: {final_test_result}")
 
         # Save the final test result
-        final_test_result_path = os.path.join(task_output_dir, f"final_test_result_task_{task}.txt")
+        final_test_result_path = os.path.join(fold_dir, f"final_test_result_task_{task}_fold{fold}.txt")
         with open(final_test_result_path, "w") as f:
             f.write(f"Best Configuration: {best_config}\n")
             f.write(f"Final Test Result: {final_test_result}\n")
 
-    print(f"Training completed for all tasks. Results saved in {output_dir}.")
+    print(f"Training completed for all tasks. Results saved in {fold_dir}.")
     a = 0
 
 
