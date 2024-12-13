@@ -983,8 +983,8 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
         ).to(device)
         best_model.load_state_dict(torch.load(best_model_path))
 
-        final_test_result = test_model(best_model, test_loader, device, task_output_dir,
-                                       task, task_type, conf_idx=None)
+        final_test_result = test_model(best_model, test_loader, device, task_output_dir, fold_dir,
+                                       task, task_type, conf_idx=None, fold=fold)
         print(f"Final Test Result for Best Model: {final_test_result}")
 
         # Save the final test result
