@@ -235,8 +235,8 @@ for clinic in clinics:
 
                 # STFT on each 1min data
                 # fs = 64  # Sampling frequency (Hz)
-                window_size = sf*2  # Length of each segment for STFT (nperseg)
-                step_size = window_size * 3 / 4  # np.round(75*window_size/100)  # 25% overlap
+                window_size = 2*sf  # Length of each segment for STFT (nperseg)
+                step_size = window_size  # * 3 / 4  # np.round(75*window_size/100)  # 25% overlap
                 nfft = window_size
                 # method1
                 # f, t, Sxx = stft(data, fs=fs, nperseg=window_size, noverlap=window_size - step_size)
@@ -256,8 +256,8 @@ for clinic in clinics:
                 np.save(os.path.join(path_sbj, 'ecg_spect_2min.npy'), Zxx_ecg)
 
                 if subject == 0:
-                    np.save(os.path.join(path_file2, 'yasa_eeg_powers/window180_step180_segmented_2min_frequency.npy'), f)
-                    np.save(os.path.join(path_file2, 'yasa_eeg_powers/window180_step180_segmented_2min_time.npy'), t)
+                    np.save(os.path.join(path_file2, 'yasa_eeg_powers/ecg_spect_window180_step180_segmented_2min_frequency.npy'), f)
+                    np.save(os.path.join(path_file2, 'yasa_eeg_powers/ecg_spect_window180_step180_segmented_2min_time.npy'), t)
             else:
                 print("Required channels not found!")
 
