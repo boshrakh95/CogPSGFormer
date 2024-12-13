@@ -212,7 +212,7 @@ for clinic in clinics:
                 # STFT on each 1min data
                 # fs = 64  # Sampling frequency (Hz)
                 window_size = sf  # Length of each segment for STFT (nperseg)
-                step_size = window_size * 3 / 4  # np.round(75*window_size/100)  # 25% overlap
+                step_size = window_size   # * 3 / 4  # np.round(75*window_size/100)  # 25% overlap
                 nfft = window_size
                 # method1
                 # f, t, Sxx = stft(data, fs=fs, nperseg=window_size, noverlap=window_size - step_size)
@@ -238,13 +238,13 @@ for clinic in clinics:
                 # Save the segmented data of each channel in a numpy file
                 for ind in range(len(eeg_channels)):
                     np.save(os.path.join(path_sbj, 'eeg_' + eeg_channels[ind] + '_spect_30sec.npy'),
-                            data_clean_segmented[:, ind, :])
+                            Zxx_eeg)
 
                 if subject == 0:
                     np.save(os.path.join(path_file2,
-                                         'yasa_eeg_powers/eeg_spect_window128_step128_segmented_30sec_frequency.npy'), f)
+                                         'yasa_eeg_powers/eeg_spect_window70_step70_segmented_30sec_frequency.npy'), f)
                     np.save(
-                        os.path.join(path_file2, 'yasa_eeg_powers/eeg_spect_window180_step180_segmented_30sec_time.npy'),
+                        os.path.join(path_file2, 'yasa_eeg_powers/eeg_spect_window70_step70_segmented_30sec_time.npy'),
                         t)
         else:
             print("Required channels not found or not all present.")
