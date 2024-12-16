@@ -57,11 +57,8 @@ def parse_args():
     parser.add_argument('--lr', type=str, required=True, help='learning rate')
     parser.add_argument('--n-epochs', type=str, required=True, help='Number of epochs')
     parser.add_argument('--train-batch-size', type=int, required=True, help='Training batch size')
-    # parser.add_argument('--n-layers-raw', type=str, required=True, help='Number of layers for raw data paths')
     parser.add_argument('--n-layers-feat', type=str, required=True, help='Number of layers for feature paths')
-    # parser.add_argument('--d-model-raw', type=str, required=True, help='Model dimension for raw data')
     parser.add_argument('--d-model-feat', type=str, required=True, help='Model dimension for features')
-    # parser.add_argument('--dim-feedforward-raw', type=str, required=True, help='Feedforward dimension for raw data')
     parser.add_argument('--dim-feedforward-feat', type=str, required=True, help='Feedforward dimension for features')
     parser.add_argument('--n-heads', type=str, required=True, help='Number of heads in Transformer')
     parser.add_argument('--dropout', type=str, required=True, help='Dropout rate in Transformer')
@@ -139,8 +136,8 @@ class TransformerBatchNormEncoderLayer(nn.Module):
 
 
 class MultiPathTransformerClassifier(nn.Module):
-    def __init__(self, feat_dims, raw_dims, d_model_feat, d_model_raw, nhead, num_layers_feat, num_layers_raw,
-                 dim_feedforward_feat, dim_feedforward_raw, dim_fc, output_dim,
+    def __init__(self, feat_dims, d_model_feat, nhead, num_layers_feat,
+                 dim_feedforward_feat, dim_fc, output_dim,
                  dropout=0.1, activation="relu", norm="BatchNorm", freeze=False, task_type="classification"):
         """
                 Args:
@@ -166,12 +163,9 @@ class MultiPathTransformerClassifier(nn.Module):
         self.project_time_hrv = nn.Linear(feat_dims[0], d_model_feat)
         self.project_freq_hrv = nn.Linear(feat_dims[1], d_model_feat)
         self.project_power = nn.Linear(feat_dims[2], d_model_feat)
-        self.project_ecg = nn.Linear(raw_dims[0], d_model_raw)
-        self.project_eeg = nn.Linear(raw_dims[1], d_model_raw)
 
         # Positional encoding
         self.pos_enc1 = FixedPositionalEncoding(d_model_feat, dropout=dropout * (1.0 - freeze))
-        self.pos_enc2 = FixedPositionalEncoding(d_model_raw, dropout=dropout * (1.0 - freeze))
 
         # Transformer encoder layers for each feature type
         self.transformer_time_hrv = nn.ModuleList([
@@ -189,37 +183,23 @@ class MultiPathTransformerClassifier(nn.Module):
                                              activation=activation, norm=norm)
             for _ in range(num_layers_feat)
         ])
-        self.transformer_ecg = nn.ModuleList([
-            TransformerBatchNormEncoderLayer(d_model_raw, nhead, dim_feedforward_raw, dropout * (1.0 - freeze),
-                                             activation=activation, norm=norm)
-            for _ in range(num_layers_raw)
-        ])
-        self.transformer_eeg = nn.ModuleList([
-            TransformerBatchNormEncoderLayer(d_model_raw, nhead, dim_feedforward_raw, dropout * (1.0 - freeze),
-                                             activation=activation, norm=norm)
-            for _ in range(num_layers_raw)
-        ])
 
         # Fully connected layer after concatenation of all streams
-        self.fc = nn.Linear((d_model_feat * 3) + (d_model_raw * 2), dim_fc)
+        self.fc = nn.Linear((d_model_feat * 3), dim_fc)
         self.layer_out = nn.Linear(dim_fc, output_dim)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x_time_hrv, x_freq_hrv, x_power, x_ecg, x_eeg):
+    def forward(self, x_time_hrv, x_freq_hrv, x_power):
 
         # Apply linear projection to match d_model
         x_time_hrv = self.project_time_hrv(x_time_hrv)
         x_freq_hrv = self.project_freq_hrv(x_freq_hrv)
         x_power = self.project_power(x_power)
-        x_ecg = self.project_ecg(x_ecg)
-        x_eeg = self.project_eeg(x_eeg)
 
         # Apply positional encoding
         x_time_hrv = self.pos_enc1(x_time_hrv.transpose(0, 1))
         x_freq_hrv = self.pos_enc1(x_freq_hrv.transpose(0, 1))
         x_power = self.pos_enc1(x_power.transpose(0, 1))
-        x_ecg = self.pos_enc2(x_ecg.transpose(0, 1))  # CHECK
-        x_eeg = self.pos_enc2(x_eeg.transpose(0, 1))
 
         # Process each feature type through its respective transformer encoder
         for layer in self.transformer_time_hrv:
@@ -228,21 +208,15 @@ class MultiPathTransformerClassifier(nn.Module):
             x_freq_hrv = layer(x_freq_hrv)
         for layer in self.transformer_power:
             x_power = layer(x_power)
-        for layer in self.transformer_ecg:
-            x_ecg = layer(x_ecg)
-        for layer in self.transformer_eeg:
-            x_eeg = layer(x_eeg)
 
         # Take the last output from each transformer encoder
         x_time_hrv = x_time_hrv[-1]  # (batch_size, d_model)
         x_freq_hrv = x_freq_hrv[-1]  # (batch_size, d_model)
         x_power = x_power[-1]  # (batch_size, d_model)
-        x_ecg = x_ecg[-1]  # (batch_size, d_model)
-        x_eeg = x_eeg[-1]  # (batch_size, d_model)
 
         # Concatenate the outputs from each transformer path
-        combined = torch.cat((x_time_hrv, x_freq_hrv, x_power, x_ecg, x_eeg), dim=1)
-        del x_time_hrv, x_freq_hrv, x_power, x_ecg, x_eeg
+        combined = torch.cat((x_time_hrv, x_freq_hrv, x_power), dim=1)
+        del x_time_hrv, x_freq_hrv, x_power
 
         # Apply dropout and pass through the fully connected layer for classification
         combined = self.dropout(combined)
@@ -963,7 +937,7 @@ batch_size_val = 64
 batch_size_test = 16
 learning_rate = [float(x) for x in args.lr.split()]
 
-path_file = args.data_dir + "/stages_raw_features_extracted_v1"
+path_file = args.data_dir + "/stages_features_extracted_v1"
 print(args)
 print(path_file)
 
