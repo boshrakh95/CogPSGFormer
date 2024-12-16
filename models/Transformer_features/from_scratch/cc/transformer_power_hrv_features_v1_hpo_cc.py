@@ -895,7 +895,7 @@ def train_model_multiple_tasks(dir_features, names_input, target_file, model_cla
         # Reload the best model and test it on the test set again (to confirm results)
         best_model = model_class(
             feat_dims=feat_dims,
-            d_model_feat=best_config["d_model_feat"], d_model_raw=best_config["d_model_raw"],
+            d_model_feat=best_config["d_model_feat"],
             nhead=best_config["nhead"], num_layers_feat=best_config["num_layers_feat"],
             dim_feedforward_feat=best_config["dim_feedforward_feat"],
             dim_fc=best_config["dim_fc"],
