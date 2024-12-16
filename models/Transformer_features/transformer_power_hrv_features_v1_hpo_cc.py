@@ -57,11 +57,11 @@ def parse_args():
     parser.add_argument('--lr', type=str, required=True, help='learning rate')
     parser.add_argument('--n-epochs', type=str, required=True, help='Number of epochs')
     parser.add_argument('--train-batch-size', type=int, required=True, help='Training batch size')
-    parser.add_argument('--n-layers-raw', type=str, required=True, help='Number of layers for raw data paths')
+    # parser.add_argument('--n-layers-raw', type=str, required=True, help='Number of layers for raw data paths')
     parser.add_argument('--n-layers-feat', type=str, required=True, help='Number of layers for feature paths')
-    parser.add_argument('--d-model-raw', type=str, required=True, help='Model dimension for raw data')
+    # parser.add_argument('--d-model-raw', type=str, required=True, help='Model dimension for raw data')
     parser.add_argument('--d-model-feat', type=str, required=True, help='Model dimension for features')
-    parser.add_argument('--dim-feedforward-raw', type=str, required=True, help='Feedforward dimension for raw data')
+    # parser.add_argument('--dim-feedforward-raw', type=str, required=True, help='Feedforward dimension for raw data')
     parser.add_argument('--dim-feedforward-feat', type=str, required=True, help='Feedforward dimension for features')
     parser.add_argument('--n-heads', type=str, required=True, help='Number of heads in Transformer')
     parser.add_argument('--dropout', type=str, required=True, help='Dropout rate in Transformer')
@@ -264,10 +264,10 @@ class MultiPathTransformerClassifier(nn.Module):
 
 class MyDataset(Dataset):
 
-    def __init__(self, dir_raw, dir_features, targets, valid_indexes, subj_indexes, subset, stats=None):
+    def __init__(self, dir_features, targets, valid_indexes, subj_indexes, subset, stats=None):
 
         self.dir_power, self.dir_hrv_t, self.dir_hrv_f = dir_features
-        self.dir_ecg, self.dir_eeg = dir_raw
+
         self.valid_indexes = valid_indexes
         self.subj_indexes = subj_indexes
         self.subset = subset
@@ -296,65 +296,21 @@ class MyDataset(Dataset):
 
         samp_index = self.subj_indexes[idx]
 
-        # Get target items corresponding to the current subset
         target = self.targets[samp_index]
-
-        # Extract subject ID
-        samp_dir_eeg = self.dir_eeg[samp_index]
-        samp_dir_ecg = self.dir_ecg[samp_index]
-        # subject_id = os.path.basename(os.path.dirname(samp_dir))
-        # print(subject_id)
-
-        # Load the EEG and ECG data and standardize them
-        eeg = torch.tensor(np.load(samp_dir_eeg+"/eeg_C3-M2_segmented_30sec.npy"), dtype=torch.float32)
-        ecg = torch.tensor(np.load(samp_dir_ecg+"/ecg_segmented_2min.npy"), dtype=torch.float32)
-        eeg = self.truncate_pad(eeg, type='eeg')
-        ecg = self.truncate_pad(ecg, type='ecg')
         power = self.X_power[samp_index]
         hrv_time = self.X_hrv_t[samp_index]
         hrv_freq = self.X_hrv_f[samp_index]
+
         if self.stats:
-            eeg = (eeg - self.stats['eeg_mean']) / self.stats['eeg_std']
-            ecg = (ecg - self.stats['ecg_mean']) / self.stats['ecg_std']
             power = (power - self.stats['power_mean']) / self.stats['power_std']
             hrv_time = (hrv_time - self.stats['hrv_t_mean']) / self.stats['hrv_t_std']
             hrv_freq = (hrv_freq - self.stats['hrv_f_mean']) / self.stats['hrv_f_std']
-
-        # if self.subset == 'train':
-        #     eeg = standardize_raw(eeg, method='all_timesteps', subset='train')
-        #     ecg = standardize_raw(ecg, method='all_timesteps', subset='train')
-        # else:
-        #     eeg = standardize_raw(eeg, method = 'all_timesteps', subset='val')
-        #     ecg = standardize_raw(ecg, method = 'all_timesteps', subset='val')
 
         return {
             'power': power,
             'hrv_time': hrv_time,
             'hrv_freq': hrv_freq,
-            'ecg': ecg,
-            'eeg': eeg,
             'label': torch.tensor(target, dtype=torch.float32)}
-
-    @staticmethod
-    def truncate_pad(data, type, seq_len_t=5):
-
-        # Retain the last five hours
-        if type == 'eeg':
-            feature_freq = 30  # duration of the windows in sec
-        elif type == 'ecg':
-            feature_freq = 120
-        duration = seq_len_t * 60 * 60  # duration of the signal to retain
-        seq_len = int(duration / feature_freq)
-        # Cut or zero-pad
-        if data.shape[0] < seq_len:
-            # Pad the array along the first axis (segments) to have shape (seq_len, num_features)
-            # data = np.pad(data, ((0, 0), (0, seq_len - data.shape[0])), mode='constant', constant_values=0)
-            pad = torch.zeros(seq_len - data.shape[0], data.shape[1])
-            data = torch.cat((data, pad), dim=0)
-        else:
-            data = data[-seq_len:, :]
-
-        return data
 
 
 def train_model(model, criterion, optimizer, train_loader, val_loader, num_epochs, device,
@@ -377,15 +333,13 @@ def train_model(model, criterion, optimizer, train_loader, val_loader, num_epoch
             x_power = batch['power'].to(device)
             x_time_hrv = batch['hrv_time'].to(device)
             x_freq_hrv = batch['hrv_freq'].to(device)
-            x_ecg = batch['ecg'].to(device)
-            x_eeg = batch['eeg'].to(device)
             labels = batch['label'].to(device)
 
             # Ensure all inputs are Float tensors
-            x_power, x_time_hrv, x_freq_hrv, x_ecg, x_eeg = map(lambda x: x.float(), [x_power, x_time_hrv, x_freq_hrv, x_ecg, x_eeg])
+            x_power, x_time_hrv, x_freq_hrv, = map(lambda x: x.float(), [x_power, x_time_hrv, x_freq_hrv])
 
             model = model.float()
-            outputs = model(x_time_hrv, x_freq_hrv, x_power, x_ecg, x_eeg)
+            outputs = model(x_time_hrv, x_freq_hrv, x_power)
 
             if task_type == "classification":
                 if model.output_dim == 1:
@@ -429,18 +383,14 @@ def train_model(model, criterion, optimizer, train_loader, val_loader, num_epoch
                 x_power = batch['power'].to(device)
                 x_time_hrv = batch['hrv_time'].to(device)
                 x_freq_hrv = batch['hrv_freq'].to(device)
-                x_ecg = batch['ecg'].to(device)
-                x_eeg = batch['eeg'].to(device)
                 labels = batch['label'].to(device)
 
                 # Ensure all inputs are Float tensors
                 x_time_hrv = x_time_hrv.float()
                 x_freq_hrv = x_freq_hrv.float()
                 x_power = x_power.float()
-                x_ecg = x_ecg.float()
-                x_eeg = x_eeg.float()
 
-                outputs = model(x_time_hrv, x_freq_hrv, x_power, x_ecg, x_eeg)
+                outputs = model(x_time_hrv, x_freq_hrv, x_power)
 
                 if task_type == "classification":
                     if model.output_dim == 1:
@@ -515,14 +465,12 @@ def test_model(model, test_loader, device, task_output_dir, fold_dir, task,
             x_power = batch['power'].to(device)
             x_time_hrv = batch['hrv_time'].to(device)
             x_freq_hrv = batch['hrv_freq'].to(device)
-            x_ecg = batch['ecg'].to(device)
-            x_eeg = batch['eeg'].to(device)
             labels = batch['label'].to(device)
 
-            x_power, x_time_hrv, x_freq_hrv, x_ecg, x_eeg = map(lambda x: x.float(),
-                                                                [x_power, x_time_hrv, x_freq_hrv, x_ecg, x_eeg])
+            x_power, x_time_hrv, x_freq_hrv = map(lambda x: x.float(),
+                                                                [x_power, x_time_hrv, x_freq_hrv])
 
-            outputs = model(x_time_hrv, x_freq_hrv, x_power, x_ecg, x_eeg)
+            outputs = model(x_time_hrv, x_freq_hrv, x_power)
             # print("outputs shape:", outputs.shape)  # Debug print
 
             if task_type == "classification":
@@ -752,7 +700,7 @@ def compute_zscore_stat(train_dataset):
     return stats
 
 
-def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, model_class, output_dir, device,
+def train_model_multiple_tasks(dir_features, names_input, target_file, model_class, output_dir, device,
                                hyperparams, batch_size_train=8, batch_size_val=128, batch_size_test=1, output_dim=1,
                                fold=1, task_type="classification", freeze=False, activation="relu", norm="BatchNorm"):
     """
@@ -813,7 +761,7 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
         # ### End of combining tasks
 
         # Modify raw data directories to include only the subjects retained for this task
-        dir_raw_mod = tuple([[lst[i] for i in valid_indices] for lst in dir_raw])
+        # dir_raw_mod = tuple([[lst[i] for i in valid_indices] for lst in dir_raw])
 
         # Split data into train/val/test sets (1/10 test, 9/10 train + val, 85% train, 15% val)
         # Find the indexes of the train, val, and test data
@@ -836,10 +784,10 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
         )
 
         # Create PyTorch datasets and loaders
-        train_dataset = MyDataset(dir_raw_mod, dir_features, y_task, valid_indices, train_subj, 'train')
+        train_dataset = MyDataset(dir_features, y_task, valid_indices, train_subj, 'train')
         # Extract feature and raw signal dimensions
         feat_dims = (train_dataset.X_hrv_t.shape[-1], train_dataset.X_hrv_f.shape[-1], train_dataset.X_power.shape[-1])
-        raw_dims = (train_dataset[0]['ecg'].shape[-1], train_dataset[0]['eeg'].shape[-1])
+        # raw_dims = (train_dataset[0]['ecg'].shape[-1], train_dataset[0]['eeg'].shape[-1])
         # stats = compute_zscore_stat(train_dataset)
         # with open("stats/stats.csv", "w", newline="") as csv_file:
         #     writer = csv.writer(csv_file)
@@ -855,10 +803,10 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
             for row in reader:
                 stats[row[0]] = list(map(float, row[1:]))
         stats = {key: value[0] for key, value in stats.items()}
-        train_dataset = MyDataset(dir_raw_mod, dir_features, y_task, valid_indices, train_subj, 'train', stats)
+        train_dataset = MyDataset(dir_features, y_task, valid_indices, train_subj, 'train', stats)
         # a = train_dataset[0]
-        val_dataset = MyDataset(dir_raw_mod, dir_features, y_task, valid_indices, val_subj, 'val', stats)
-        test_dataset = MyDataset(dir_raw_mod, dir_features, y_task, valid_indices, test_subj, 'test', stats)
+        val_dataset = MyDataset(dir_features, y_task, valid_indices, val_subj, 'val', stats)
+        test_dataset = MyDataset(dir_features, y_task, valid_indices, test_subj, 'test', stats)
 
         train_loader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True)
         val_loader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=False)
@@ -887,12 +835,10 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
             conf_dict = dict(zip(config_keys, conf))
             print(f"Training with configuration {conf_idx + 1}: {conf_dict}")
 
-            model = model_class(feat_dims=feat_dims, raw_dims=raw_dims,
-                                d_model_feat=conf_dict["d_model_feat"], d_model_raw=conf_dict["d_model_raw"],
+            model = model_class(feat_dims=feat_dims,
+                                d_model_feat=conf_dict["d_model_feat"],
                                 nhead=conf_dict["nhead"], num_layers_feat=conf_dict["num_layers_feat"],
-                                num_layers_raw=conf_dict["num_layers_raw"],
                                 dim_feedforward_feat=conf_dict["dim_feedforward_feat"],
-                                dim_feedforward_raw=conf_dict["dim_feedforward_raw"],
                                 dim_fc=conf_dict["dim_fc"], output_dim=output_dim, dropout=conf_dict["dropout"],
                                 activation=activation, norm=norm,
                                 freeze=freeze, task_type=task_type).to(device)
@@ -974,11 +920,11 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
 
         # Reload the best model and test it on the test set again (to confirm results)
         best_model = model_class(
-            feat_dims=feat_dims, raw_dims=raw_dims,
+            feat_dims=feat_dims,
             d_model_feat=best_config["d_model_feat"], d_model_raw=best_config["d_model_raw"],
             nhead=best_config["nhead"], num_layers_feat=best_config["num_layers_feat"],
-            num_layers_raw=best_config["num_layers_raw"], dim_feedforward_feat=best_config["dim_feedforward_feat"],
-            dim_feedforward_raw=best_config["dim_feedforward_raw"], dim_fc=best_config["dim_fc"],
+            dim_feedforward_feat=best_config["dim_feedforward_feat"],
+            dim_fc=best_config["dim_fc"],
             output_dim=output_dim, dropout=best_config["dropout"], activation=activation,
             norm=norm, freeze=freeze, task_type=task_type
         ).to(device)
@@ -1001,13 +947,10 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
 args = parse_args()
 
 # Hyperparameters and Data Preparation
-d_model_raw = [int(x) for x in args.d_model_raw.split()]
 d_model_feat = [int(x) for x in args.d_model_feat.split()]
 nhead = [int(x) for x in args.n_heads.split()]
 num_layers_feat = [int(x) for x in args.n_layers_feat.split()]
-num_layers_raw = [int(x) for x in args.n_layers_raw.split()]
 dim_feedforward_feat = [int(x) for x in args.dim_feedforward_feat.split()]
-dim_feedforward_raw = [int(x) for x in args.dim_feedforward_raw.split()]
 dim_fc = [int(x) for x in args.dim_fc.split()]
 output_dim = 1  # Set to 1 for binary classification or regression; set to number of classes for multi-class classific
 dropout = [float(x) for x in args.dropout.split()]
@@ -1027,8 +970,6 @@ print(path_file)
 # path_file = "/media/livia/Elements/public_sleep_data/stages/stages/original/STAGES_PSGs"
 path_save = path_file + "/yasa_eeg_powers"
 dir_targets = path_save + "/all_scores_classification_for_yasa_c3_eeg_rel_power_analysis.csv"
-dir_ecg = sorted(glob2.glob(path_file + '/PSGs/[!p]*/ecg_segmented_2min/*'))
-dir_eeg = sorted(glob2.glob(path_file + '/PSGs/[!p]*/eeg_segmented_30sec/*'))
 
 # Read the extracted EEG/ECG features
 dir_power = path_save + "/yasa_c3_eeg_rel_powers.npy"
@@ -1046,60 +987,18 @@ for num_subj in range(len(subj_retained_for_power_analysis)):
     names_input.append(name)
 names_input = np.array(names_input)
 
-# # Names ecg
-# names_ecg = []
-# for num_subj in range(len(dir_ecg)):
-#     m = re.search('.*/([^/]+)$', dir_ecg[num_subj])
-#     if m:
-#         name = m.group(1)
-#     names_ecg.append(name)
-# names_ecg = np.array(names_ecg)
-
-# # Names eeg
-# names_eeg = []
-# for num_subj in range(len(dir_eeg)):
-#     m = re.search('.*/([^/]+)$', dir_eeg[num_subj])
-#     if m:
-#         name = m.group(1)
-#     names_eeg.append(name)
-# names_eeg = np.array(names_eeg)
-# print(sum(names_ecg == names_input)==len(names_ecg))
-
-# Note: names_ecg and names_input are the same, names_eeg has a few more bc some subjs were removed in yasa data processing
-
-# # Remove the extra eeg directories from PC (Ran once, no need to run again)
-# set1 = set(names_input)
-# set2 = set(names_eeg)
-# noncommon_ids = set2.symmetric_difference(set1)
-# noncommon_ids_list = sorted(list(noncommon_ids))
-
-# # Find the directories to delete
-# directories_to_delete = [
-#     dir_path for dir_path in dir_eeg if any(sub_id in dir_path for sub_id in noncommon_ids_list)]
-# # Remove the directories and their contents
-# for dir_path in directories_to_delete:
-#     if os.path.exists(dir_path):
-#         print(f"Removing directory and its contents: {dir_path}")
-#         shutil.rmtree(dir_path)  # Deletes the directory and all its contents
-#     else:
-#         print(f"Directory not found: {dir_path}")
-# # Rerun the dir_eeg load and names_eeg creation and then run the below line to check if the names match
-# print(sum(names_ecg == names_eeg)==len(names_ecg))  # Should be True
-# Note: did all these to make sure the subjects of eeg, ecg, and feature data are the same
-
 # output_dir = "/home/boshra95/projects/def-forouzan/boshra95/results"
 output_dir = args.output_dir
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-hyperparams = {"d_model_raw": d_model_raw, "d_model_feat": d_model_feat, "nhead": nhead,
-               "num_layers_feat": num_layers_feat, "num_layers_raw": num_layers_raw,
-               "dim_feedforward_feat": dim_feedforward_feat, "dim_feedforward_raw": dim_feedforward_raw,
+hyperparams = {"d_model_feat": d_model_feat, "nhead": nhead,
+               "num_layers_feat": num_layers_feat,
+               "dim_feedforward_feat": dim_feedforward_feat,
                "dim_fc": dim_fc, "dropout": dropout, "num_epochs": num_epochs,
                "learning_rate": learning_rate}
 
 train_model_multiple_tasks(
     dir_features=(dir_power, dir_hrv_t, dir_hrv_f),
-    dir_raw=(dir_ecg, dir_eeg),
     names_input=names_input,
     target_file=dir_targets,
     model_class=MultiPathTransformerClassifier,
