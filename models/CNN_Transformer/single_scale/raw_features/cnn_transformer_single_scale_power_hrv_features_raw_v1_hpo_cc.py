@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-# @Time    : 12 Dec 2024
+# @Time    : 17 Dec 2024
 # @Author  : Boshra
 
-# fixed transformer arch, EEG(c3-m2) powers of 6 bands + ECG time/freq HRV features over time + raw ECG/EEG signals
+# fixed CNN-transformer arch, EEG(c3-m2) powers of 6 bands + ECG time/freq HRV features over time + raw ECG/EEG signals
+# projection head for raw data: 1-D single-scale CNN (kernel size is hyperparam), projection head for features: MLP
 # Dataset: neurokit_hrv_params_f.npy, neurokit_hrv_params_t.npy, yasa_c3_eeg_rel_powers.npy
 # : created in "test_rnn_power_hrv.py" from
 #                                processed in "process_augmented1_dataset.py"
@@ -61,6 +62,9 @@ def parse_args():
     parser.add_argument('--train-batch-size', type=int, required=True, help='Training batch size')
     parser.add_argument('--n-layers-raw', type=str, required=True, help='Number of layers for raw data paths')
     parser.add_argument('--n-layers-feat', type=str, required=True, help='Number of layers for feature paths')
+    parser.add_argument('--n-cnn-layers', type=str, required=True, help='Number of CNN layers for raw data')
+    parser.add_argument('--kernel-size-ecg', type=str, required=True, help='Kernel size for ECG CNN')
+    parser.add_argument('--kernel-size-eeg', type=str, required=True, help='Kernel size for EEG CNN')
     parser.add_argument('--d-model-raw', type=str, required=True, help='Model dimension for raw data')
     parser.add_argument('--d-model-feat', type=str, required=True, help='Model dimension for features')
     parser.add_argument('--dim-feedforward-raw', type=str, required=True, help='Feedforward dimension for raw data')
@@ -141,34 +145,73 @@ class TransformerBatchNormEncoderLayer(nn.Module):
 
 
 class CNNProjection(nn.Module):
-    def __init__(self, in_channels, d_model_raw, num_layers=2, kernel_size=3, stride=1, dropout=0.1):
+    def __init__(self, d_model_raw, num_cnn_layers, kernel_size, stride=1, dropout=0.1):
+        """
+        CNN Projection for raw data streams (e.g., EEG or ECG).
+
+        Args:
+            d_model_raw (int): Target feature dimension for the Transformer input.
+            kernel_size (int): Size of the convolution kernel.
+            stride (int): Stride for the convolution.
+            dropout (float): Dropout rate.
+        """
         super(CNNProjection, self).__init__()
+
+        self.num_layers = num_cnn_layers
+
+        # Define CNN layers
         layers = []
-        current_channels = in_channels
+        in_channels = 1  # Initial input has 1 channel
+        if num_cnn_layers == 1:
+            self.cnn = nn.Conv1d(
+                in_channels=in_channels, out_channels=d_model_raw,
+                kernel_size=kernel_size, stride=stride, padding=kernel_size // 2
+            )
+        else:
+            for i in range(num_cnn_layers):
+                layers.append(nn.Conv1d(
+                    in_channels=in_channels, out_channels=d_model_raw,
+                    kernel_size=kernel_size, stride=stride, padding=kernel_size // 2
+                ))
+                layers.append(nn.ReLU())  # Activation function
+                layers.append(nn.BatchNorm1d(d_model_raw))  # Normalization
+                layers.append(nn.Dropout(dropout))  # Dropout
+                in_channels = d_model_raw  # For next layer, input channels match the output channels
 
-        # Stack multiple CNN layers
-        for i in range(num_layers):
-            layers.append(nn.Conv1d(current_channels, d_model_raw, kernel_size, stride, padding=kernel_size // 2))
-            layers.append(nn.ReLU())  # Activation function
-            layers.append(nn.BatchNorm1d(d_model_raw))  # Normalization
-            layers.append(nn.Dropout(dropout))  # Dropout
-            current_channels = d_model_raw
-
-        self.cnn = nn.Sequential(*layers)
-        self.flatten = nn.Linear(d_model_raw, d_model_raw)  # Optional linear layer
+            self.cnn = nn.Sequential(*layers)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
-        # Input shape: (batch_size, num_segments, num_samples_per_segment)
-        x = x.permute(0, 2, 1)  # Shape -> (batch_size, num_samples_per_segment, num_segments)
-        x = self.cnn(x)  # Apply CNN -> (batch_size, d_model_raw, num_segments)
-        x = x.permute(0, 2, 1)  # Shape -> (batch_size, num_segments, d_model_raw)
-        x = self.flatten(x)  # Optional linear projection
+        """
+        Forward pass through the CNN projection.
+
+        Args:
+            x (tensor): Input of shape (batch_size, num_segments, num_samples_per_segment).
+
+        Returns:
+            tensor: Output of shape (batch_size, num_segments, d_model_raw).
+        """
+        batch_size, num_segments, num_samples_per_segment = x.shape
+
+        # Step 1: Reshape for CNN -> (batch_size * num_segments, 1, num_samples_per_segment)
+        x = x.view(batch_size * num_segments, 1, num_samples_per_segment)
+
+        # Step 2: Pass through 1D CNN -> (batch_size * num_segments, d_model_raw, reduced_length)
+        x = self.cnn(x)
+
+        # Step 3: Global Average Pooling to fix representation -> (batch_size * num_segments, d_model_raw)
+        x = F.adaptive_avg_pool1d(x, 1).squeeze(-1)  # Global pooling reduces to size 1 in time dimension
+        x = self.dropout(x)  # Apply dropout
+
+        # Step 4: Reshape back to Transformer input -> (batch_size, num_segments, d_model_raw)
+        x = x.view(batch_size, num_segments, -1)
+
         return x
 
 
 class MultiPathTransformerClassifier(nn.Module):
     def __init__(self, feat_dims, raw_dims, d_model_feat, d_model_raw, nhead, num_layers_feat, num_layers_raw,
-                 dim_feedforward_feat, dim_feedforward_raw, dim_fc, output_dim,
+                 num_cnn_layers, kernel_size_ecg, kernel_size_eeg, dim_feedforward_feat, dim_feedforward_raw, dim_fc, output_dim,
                  dropout=0.1, activation="relu", norm="BatchNorm", freeze=False, task_type="classification"):
         super(MultiPathTransformerClassifier, self).__init__()
 
@@ -181,8 +224,10 @@ class MultiPathTransformerClassifier(nn.Module):
         self.project_power = nn.Linear(feat_dims[2], d_model_feat)
 
         # CNN projection heads for raw data
-        self.project_ecg = CNNProjection(in_channels=raw_dims[0], d_model_raw=d_model_raw, num_layers=2)
-        self.project_eeg = CNNProjection(in_channels=raw_dims[1], d_model_raw=d_model_raw, num_layers=2)
+        self.project_ecg = CNNProjection(d_model_raw=d_model_raw,
+                                         num_cnn_layers=num_cnn_layers, kernel_size=kernel_size_ecg)
+        self.project_eeg = CNNProjection(d_model_raw=d_model_raw,
+                                         num_cnn_layers=num_cnn_layers, kernel_size=kernel_size_eeg)
 
         # Positional encoding
         self.pos_enc1 = FixedPositionalEncoding(d_model_feat, dropout=dropout * (1.0 - freeze))
@@ -248,130 +293,6 @@ class MultiPathTransformerClassifier(nn.Module):
         if self.task_type == "classification" and self.output_dim == 1:
             return out  # BCEWithLogitsLoss expects raw logits
         return out
-
-
-# class MultiPathTransformerClassifier(nn.Module):
-#     def __init__(self, feat_dims, raw_dims, d_model_feat, d_model_raw, nhead, num_layers_feat, num_layers_raw,
-#                  dim_feedforward_feat, dim_feedforward_raw, dim_fc, output_dim,
-#                  dropout=0.1, activation="relu", norm="BatchNorm", freeze=False, task_type="classification"):
-#         """
-#                 Args:
-#                     input_dims (tuple): Feature dimensions for each input stream.
-#                     d_model (int): Target feature dimension for each stream after projection.
-#                     nhead (int): Number of attention heads in the transformer.
-#                     num_layers (int): Number of transformer layers for each stream.
-#                     dim_feedforward (int): Dimension of the feedforward network.
-#                     output_dim (int): Number of output classes for classification or 1 for regression.
-#                     dropout (float): Dropout rate.
-#                     pos_encoding (str): Type of positional encoding ('fixed').
-#                     activation (str): Activation function ('relu' or 'gelu').
-#                     norm (str): Type of normalization ('BatchNorm' or 'LayerNorm').
-#                     freeze (bool): Whether to freeze the dropout for fine-tuning.
-#                     task_type (str): Task type - 'classification' or 'regression'.
-#                 """
-#         super(MultiPathTransformerClassifier, self).__init__()
-#
-#         self.task_type = task_type
-#         self.output_dim = output_dim
-#
-#         # Linear projection layers for each stream to match d_model
-#         self.project_time_hrv = nn.Linear(feat_dims[0], d_model_feat)
-#         self.project_freq_hrv = nn.Linear(feat_dims[1], d_model_feat)
-#         self.project_power = nn.Linear(feat_dims[2], d_model_feat)
-#         self.project_ecg = nn.Linear(raw_dims[0], d_model_raw)
-#         self.project_eeg = nn.Linear(raw_dims[1], d_model_raw)
-#
-#         # Positional encoding
-#         self.pos_enc1 = FixedPositionalEncoding(d_model_feat, dropout=dropout * (1.0 - freeze))
-#         self.pos_enc2 = FixedPositionalEncoding(d_model_raw, dropout=dropout * (1.0 - freeze))
-#
-#         # Transformer encoder layers for each feature type
-#         self.transformer_time_hrv = nn.ModuleList([
-#             TransformerBatchNormEncoderLayer(d_model_feat, nhead, dim_feedforward_feat, dropout * (1.0 - freeze),
-#                                              activation=activation, norm=norm)
-#             for _ in range(num_layers_feat)
-#         ])
-#         self.transformer_freq_hrv = nn.ModuleList([
-#             TransformerBatchNormEncoderLayer(d_model_feat, nhead, dim_feedforward_feat, dropout * (1.0 - freeze),
-#                                              activation=activation, norm=norm)
-#             for _ in range(num_layers_feat)
-#         ])
-#         self.transformer_power = nn.ModuleList([
-#             TransformerBatchNormEncoderLayer(d_model_feat, nhead, dim_feedforward_feat, dropout * (1.0 - freeze),
-#                                              activation=activation, norm=norm)
-#             for _ in range(num_layers_feat)
-#         ])
-#         self.transformer_ecg = nn.ModuleList([
-#             TransformerBatchNormEncoderLayer(d_model_raw, nhead, dim_feedforward_raw, dropout * (1.0 - freeze),
-#                                              activation=activation, norm=norm)
-#             for _ in range(num_layers_raw)
-#         ])
-#         self.transformer_eeg = nn.ModuleList([
-#             TransformerBatchNormEncoderLayer(d_model_raw, nhead, dim_feedforward_raw, dropout * (1.0 - freeze),
-#                                              activation=activation, norm=norm)
-#             for _ in range(num_layers_raw)
-#         ])
-#
-#         # Fully connected layer after concatenation of all streams
-#         self.fc = nn.Linear((d_model_feat * 3) + (d_model_raw * 2), dim_fc)
-#         self.layer_out = nn.Linear(dim_fc, output_dim)
-#         self.dropout = nn.Dropout(dropout)
-#
-#     def forward(self, x_time_hrv, x_freq_hrv, x_power, x_ecg, x_eeg):
-#
-#         # Apply linear projection to match d_model
-#         x_time_hrv = self.project_time_hrv(x_time_hrv)
-#         x_freq_hrv = self.project_freq_hrv(x_freq_hrv)
-#         x_power = self.project_power(x_power)
-#         x_ecg = self.project_ecg(x_ecg)
-#         x_eeg = self.project_eeg(x_eeg)
-#
-#         # Apply positional encoding
-#         x_time_hrv = self.pos_enc1(x_time_hrv.transpose(0, 1))
-#         x_freq_hrv = self.pos_enc1(x_freq_hrv.transpose(0, 1))
-#         x_power = self.pos_enc1(x_power.transpose(0, 1))
-#         x_ecg = self.pos_enc2(x_ecg.transpose(0, 1))  # CHECK
-#         x_eeg = self.pos_enc2(x_eeg.transpose(0, 1))
-#
-#         # Process each feature type through its respective transformer encoder
-#         for layer in self.transformer_time_hrv:
-#             x_time_hrv = layer(x_time_hrv)
-#         for layer in self.transformer_freq_hrv:
-#             x_freq_hrv = layer(x_freq_hrv)
-#         for layer in self.transformer_power:
-#             x_power = layer(x_power)
-#         for layer in self.transformer_ecg:
-#             x_ecg = layer(x_ecg)
-#         for layer in self.transformer_eeg:
-#             x_eeg = layer(x_eeg)
-#
-#         # Take the last output from each transformer encoder
-#         x_time_hrv = x_time_hrv[-1]  # (batch_size, d_model)
-#         x_freq_hrv = x_freq_hrv[-1]  # (batch_size, d_model)
-#         x_power = x_power[-1]  # (batch_size, d_model)
-#         x_ecg = x_ecg[-1]  # (batch_size, d_model)
-#         x_eeg = x_eeg[-1]  # (batch_size, d_model)
-#
-#         # Concatenate the outputs from each transformer path
-#         combined = torch.cat((x_time_hrv, x_freq_hrv, x_power, x_ecg, x_eeg), dim=1)
-#         del x_time_hrv, x_freq_hrv, x_power, x_ecg, x_eeg
-#
-#         # Apply dropout and pass through the fully connected layer for classification
-#         combined = self.dropout(combined)
-#         out = self.layer_out(self.fc(combined))
-#
-#         # Apply final activation based on task type
-#         if self.task_type == "classification":
-#             if self.output_dim == 1:
-#                 # For binary classification, raw logits without activation (for BCEWithLogitsLoss)
-#                 return out  # Output shape should be (batch_size, 1)
-#             else:
-#                 # For multi-class classification, use logits for CrossEntropyLoss
-#                 return out
-#         elif self.task_type == "regression":
-#             return out  # Raw output for regression
-#         else:
-#             raise ValueError("task_type should be 'classification' or 'regression'")
 
 
 class MyDataset(Dataset):
@@ -1002,7 +923,8 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
             model = model_class(feat_dims=feat_dims, raw_dims=raw_dims,
                                 d_model_feat=conf_dict["d_model_feat"], d_model_raw=conf_dict["d_model_raw"],
                                 nhead=conf_dict["nhead"], num_layers_feat=conf_dict["num_layers_feat"],
-                                num_layers_raw=conf_dict["num_layers_raw"],
+                                num_layers_raw=conf_dict["num_layers_raw"], num_cnn_layers=conf_dict["num_cnn_layers"],
+                                kernel_size_ecg=conf_dict["kernel_size_ecg"], kernel_size_eeg=conf_dict["kernel_size_eeg"],
                                 dim_feedforward_feat=conf_dict["dim_feedforward_feat"],
                                 dim_feedforward_raw=conf_dict["dim_feedforward_raw"],
                                 dim_fc=conf_dict["dim_fc"], output_dim=output_dim, dropout=conf_dict["dropout"],
@@ -1089,7 +1011,10 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
             feat_dims=feat_dims, raw_dims=raw_dims,
             d_model_feat=best_config["d_model_feat"], d_model_raw=best_config["d_model_raw"],
             nhead=best_config["nhead"], num_layers_feat=best_config["num_layers_feat"],
-            num_layers_raw=best_config["num_layers_raw"], dim_feedforward_feat=best_config["dim_feedforward_feat"],
+            num_layers_raw=best_config["num_layers_raw"],
+            num_cnn_layers=best_config["num_cnn_layers"], kernel_size_ecg=best_config["kernel_size_ecg"],
+            kernel_size_eeg=best_config["kernel_size_eeg"],
+            dim_feedforward_feat=best_config["dim_feedforward_feat"],
             dim_feedforward_raw=best_config["dim_feedforward_raw"], dim_fc=best_config["dim_fc"],
             output_dim=output_dim, dropout=best_config["dropout"], activation=activation,
             norm=norm, freeze=freeze, task_type=task_type
@@ -1118,6 +1043,9 @@ d_model_feat = [int(x) for x in args.d_model_feat.split()]
 nhead = [int(x) for x in args.n_heads.split()]
 num_layers_feat = [int(x) for x in args.n_layers_feat.split()]
 num_layers_raw = [int(x) for x in args.n_layers_raw.split()]
+num_cnn_layers = [int(x) for x in args.n_cnn_layers.split()]
+kernel_size_ecg = [int(x) for x in args.kernel_size_ecg.split()]
+kernel_size_eeg = [int(x) for x in args.kernel_size_eeg.split()]
 dim_feedforward_feat = [int(x) for x in args.dim_feedforward_feat.split()]
 dim_feedforward_raw = [int(x) for x in args.dim_feedforward_raw.split()]
 dim_fc = [int(x) for x in args.dim_fc.split()]
@@ -1205,6 +1133,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 hyperparams = {"d_model_raw": d_model_raw, "d_model_feat": d_model_feat, "nhead": nhead,
                "num_layers_feat": num_layers_feat, "num_layers_raw": num_layers_raw,
+               "num_cnn_layers": num_cnn_layers, "kernel_size_ecg": kernel_size_ecg, "kernel_size_eeg": kernel_size_eeg,
                "dim_feedforward_feat": dim_feedforward_feat, "dim_feedforward_raw": dim_feedforward_raw,
                "dim_fc": dim_fc, "dropout": dropout, "num_epochs": num_epochs,
                "learning_rate": learning_rate}
