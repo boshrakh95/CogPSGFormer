@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# @Time    : 17 Dec 2024
+# @Time    : 18 Dec 2024
 # @Author  : Boshra
 
 # fixed CNN-transformer arch, EEG(c3-m2) powers of 6 bands + ECG time/freq HRV features over time + raw ECG/EEG signals
