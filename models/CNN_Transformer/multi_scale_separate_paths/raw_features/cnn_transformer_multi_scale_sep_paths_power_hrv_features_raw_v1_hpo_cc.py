@@ -40,6 +40,7 @@ import os
 # import shutil
 import csv
 import argparse
+import ast
 import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('Agg')
@@ -1050,7 +1051,7 @@ nhead = [int(x) for x in args.n_heads.split()]
 num_layers_feat = [int(x) for x in args.n_layers_feat.split()]
 num_layers_raw = [int(x) for x in args.n_layers_raw.split()]
 num_cnn_layers = [int(x) for x in args.n_cnn_layers.split()]
-kernel_sizes = [int(x) for x in args.kernel_sizes.split()]
+kernel_sizes = ast.literal_eval(args.kernel_sizes)
 dim_feedforward_feat = [int(x) for x in args.dim_feedforward_feat.split()]
 dim_feedforward_raw = [int(x) for x in args.dim_feedforward_raw.split()]
 dim_fc = [int(x) for x in args.dim_fc.split()]
