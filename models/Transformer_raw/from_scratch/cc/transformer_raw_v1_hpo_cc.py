@@ -183,7 +183,7 @@ class MultiPathTransformerClassifier(nn.Module):
         self.layer_out = nn.Linear(dim_fc, output_dim)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x_time_hrv, x_freq_hrv, x_power, x_ecg, x_eeg):
+    def forward(self, x_ecg, x_eeg):
 
         # Apply linear projection to match d_model
         x_ecg = self.project_ecg(x_ecg)
