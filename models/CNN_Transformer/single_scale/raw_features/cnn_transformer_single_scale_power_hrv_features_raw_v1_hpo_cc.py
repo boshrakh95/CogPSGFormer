@@ -144,69 +144,123 @@ class TransformerBatchNormEncoderLayer(nn.Module):
         return src
 
 
+# Process segments separately
 class CNNProjection(nn.Module):
     def __init__(self, d_model_raw, num_cnn_layers, kernel_size, stride=1, dropout=0.1):
-        """
-        CNN Projection for raw data streams (e.g., EEG or ECG).
-
-        Args:
-            d_model_raw (int): Target feature dimension for the Transformer input.
-            kernel_size (int): Size of the convolution kernel.
-            stride (int): Stride for the convolution.
-            dropout (float): Dropout rate.
-        """
         super(CNNProjection, self).__init__()
 
         self.num_layers = num_cnn_layers
 
         # Define CNN layers
         layers = []
-        in_channels = 1  # Initial input has 1 channel
+        in_channels = 1  # Input has 1 channel
         if num_cnn_layers == 1:
-            self.cnn = nn.Conv1d(
-                in_channels=in_channels, out_channels=d_model_raw,
-                kernel_size=kernel_size, stride=stride, padding=kernel_size // 2
-            )
+            self.cnn = nn.Conv1d(in_channels=in_channels, out_channels=d_model_raw,
+                                 kernel_size=kernel_size, stride=stride, padding=kernel_size // 2)
         else:
             for i in range(num_cnn_layers):
-                layers.append(nn.Conv1d(
-                    in_channels=in_channels, out_channels=d_model_raw,
-                    kernel_size=kernel_size, stride=stride, padding=kernel_size // 2
-                ))
-                layers.append(nn.ReLU())  # Activation function
-                layers.append(nn.BatchNorm1d(d_model_raw))  # Normalization
-                layers.append(nn.Dropout(dropout))  # Dropout
-                in_channels = d_model_raw  # For next layer, input channels match the output channels
-
+                layers.append(nn.Conv1d(in_channels=in_channels, out_channels=d_model_raw,
+                                        kernel_size=kernel_size, stride=stride, padding=kernel_size // 2))
+                layers.append(nn.ReLU())
+                layers.append(nn.BatchNorm1d(d_model_raw))
+                layers.append(nn.Dropout(dropout))
+                in_channels = d_model_raw
             self.cnn = nn.Sequential(*layers)
+
+        self.global_pool = nn.AdaptiveAvgPool1d(1)  # Global average pooling
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         """
-        Forward pass through the CNN projection.
-
         Args:
-            x (tensor): Input of shape (batch_size, num_segments, num_samples_per_segment).
+            x: Tensor of shape (batch_size, num_segments, num_samples_per_segment)
 
         Returns:
-            tensor: Output of shape (batch_size, num_segments, d_model_raw).
+            Tensor of shape (batch_size, num_segments, d_model_raw)
         """
         batch_size, num_segments, num_samples_per_segment = x.shape
 
-        # Step 1: Reshape for CNN -> (batch_size * num_segments, 1, num_samples_per_segment)
-        x = x.view(batch_size * num_segments, 1, num_samples_per_segment)
+        outputs = []
+        for i in range(num_segments):
+            # Extract one segment at a time (shape: batch_size, 1, num_samples_per_segment)
+            x_segment = x[:, i, :].unsqueeze(1)
 
-        # Step 2: Pass through 1D CNN -> (batch_size * num_segments, d_model_raw, reduced_length)
-        x = self.cnn(x)
+            # Apply CNN and pooling
+            x_segment = self.cnn(x_segment)  # (batch_size, d_model_raw, reduced_length)
+            x_segment = self.global_pool(x_segment).squeeze(-1)  # (batch_size, d_model_raw)
 
-        # Step 3: Global Average Pooling to fix representation -> (batch_size * num_segments, d_model_raw)
-        x = F.adaptive_avg_pool1d(x, 1).squeeze(-1)  # Global pooling reduces to size 1 in time dimension
-        x = self.dropout(x)  # Apply dropout
+            outputs.append(x_segment)
 
-        # Step 4: Reshape back to Transformer input -> (batch_size, num_segments, d_model_raw)
-        x = x.view(batch_size, num_segments, -1)
-
+        # Stack outputs along the segment dimension -> (batch_size, num_segments, d_model_raw)
+        x = torch.stack(outputs, dim=1)
+        x = self.dropout(x)
         return x
+
+
+# Flattening the signals and applying CNN projection on all at once (out of memory error)
+# class CNNProjection(nn.Module):
+#     def __init__(self, d_model_raw, num_cnn_layers, kernel_size, stride=1, dropout=0.1):
+#         """
+#         CNN Projection for raw data streams (e.g., EEG or ECG).
+#
+#         Args:
+#             d_model_raw (int): Target feature dimension for the Transformer input.
+#             kernel_size (int): Size of the convolution kernel.
+#             stride (int): Stride for the convolution.
+#             dropout (float): Dropout rate.
+#         """
+#         super(CNNProjection, self).__init__()
+#
+#         self.num_layers = num_cnn_layers
+#
+#         # Define CNN layers
+#         layers = []
+#         in_channels = 1  # Initial input has 1 channel
+#         if num_cnn_layers == 1:
+#             self.cnn = nn.Conv1d(
+#                 in_channels=in_channels, out_channels=d_model_raw,
+#                 kernel_size=kernel_size, stride=stride, padding=kernel_size // 2
+#             )
+#         else:
+#             for i in range(num_cnn_layers):
+#                 layers.append(nn.Conv1d(
+#                     in_channels=in_channels, out_channels=d_model_raw,
+#                     kernel_size=kernel_size, stride=stride, padding=kernel_size // 2
+#                 ))
+#                 layers.append(nn.ReLU())  # Activation function
+#                 layers.append(nn.BatchNorm1d(d_model_raw))  # Normalization
+#                 layers.append(nn.Dropout(dropout))  # Dropout
+#                 in_channels = d_model_raw  # For next layer, input channels match the output channels
+#
+#             self.cnn = nn.Sequential(*layers)
+#         self.dropout = nn.Dropout(dropout)
+#
+#     def forward(self, x):
+#         """
+#         Forward pass through the CNN projection.
+#
+#         Args:
+#             x (tensor): Input of shape (batch_size, num_segments, num_samples_per_segment).
+#
+#         Returns:
+#             tensor: Output of shape (batch_size, num_segments, d_model_raw).
+#         """
+#         batch_size, num_segments, num_samples_per_segment = x.shape
+#
+#         # Step 1: Reshape for CNN -> (batch_size * num_segments, 1, num_samples_per_segment)
+#         x = x.view(batch_size * num_segments, 1, num_samples_per_segment)
+#
+#         # Step 2: Pass through 1D CNN -> (batch_size * num_segments, d_model_raw, reduced_length)
+#         x = self.cnn(x)
+#
+#         # Step 3: Global Average Pooling to fix representation -> (batch_size * num_segments, d_model_raw)
+#         x = F.adaptive_avg_pool1d(x, 1).squeeze(-1)  # Global pooling reduces to size 1 in time dimension
+#         x = self.dropout(x)  # Apply dropout
+#
+#         # Step 4: Reshape back to Transformer input -> (batch_size, num_segments, d_model_raw)
+#         x = x.view(batch_size, num_segments, -1)
+#
+#         return x
 
 
 class MultiPathTransformerClassifier(nn.Module):
