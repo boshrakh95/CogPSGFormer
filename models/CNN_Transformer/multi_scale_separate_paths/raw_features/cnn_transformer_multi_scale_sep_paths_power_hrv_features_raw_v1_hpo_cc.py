@@ -793,7 +793,7 @@ def compute_zscore_stat(train_dataset):
 
 
 def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, model_class, output_dir, device,
-                               hyperparams, batch_size_train=8, batch_size_val=128, batch_size_test=1, output_dim=1,
+                               hyperparams, kernel_sizes, batch_size_train=8, batch_size_val=128, batch_size_test=1, output_dim=1,
                                fold=1, task_type="classification", freeze=False, activation="relu", norm="BatchNorm"):
     """
     Train the model for each column in the target file.
@@ -910,6 +910,7 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
         all_configs = list(product(*hyperparams.values()))  # Generate all possible configurations
         config_keys = list(hyperparams.keys())
         selected_configs = random2.sample(all_configs, num_config)  # Randomly sample 5 configurations
+        print(f"CNN kernel sizes: {kernel_sizes}")
 
         # Dir for saving the results
         task_output_dir = os.path.join(output_dir, task)
@@ -931,7 +932,7 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
                                 d_model_feat=conf_dict["d_model_feat"], d_model_raw=conf_dict["d_model_raw"],
                                 nhead=conf_dict["nhead"], num_layers_feat=conf_dict["num_layers_feat"],
                                 num_layers_raw=conf_dict["num_layers_raw"], num_cnn_layers=conf_dict["num_cnn_layers"],
-                                kernel_sizes=conf_dict["kernel_sizes"],
+                                kernel_sizes=kernel_sizes,
                                 dim_feedforward_feat=conf_dict["dim_feedforward_feat"],
                                 dim_feedforward_raw=conf_dict["dim_feedforward_raw"],
                                 dim_fc=conf_dict["dim_fc"], output_dim=output_dim, dropout=conf_dict["dropout"],
@@ -1020,7 +1021,7 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
             nhead=best_config["nhead"], num_layers_feat=best_config["num_layers_feat"],
             num_layers_raw=best_config["num_layers_raw"],
             num_cnn_layers=best_config["num_cnn_layers"],
-            kernel_sizes=best_config["kernel_sizes"],
+            kernel_sizes=kernel_sizes,
             dim_feedforward_feat=best_config["dim_feedforward_feat"],
             dim_feedforward_raw=best_config["dim_feedforward_raw"], dim_fc=best_config["dim_fc"],
             output_dim=output_dim, dropout=best_config["dropout"], activation=activation,
@@ -1139,7 +1140,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 hyperparams = {"d_model_raw": d_model_raw, "d_model_feat": d_model_feat, "nhead": nhead,
                "num_layers_feat": num_layers_feat, "num_layers_raw": num_layers_raw,
-               "num_cnn_layers": num_cnn_layers, "kernel_sizes": kernel_sizes,
+               "num_cnn_layers": num_cnn_layers,
                "dim_feedforward_feat": dim_feedforward_feat, "dim_feedforward_raw": dim_feedforward_raw,
                "dim_fc": dim_fc, "dropout": dropout, "num_epochs": num_epochs,
                "learning_rate": learning_rate}
@@ -1153,6 +1154,7 @@ train_model_multiple_tasks(
     output_dir=output_dir,
     device=device,
     hyperparams=hyperparams,
+    kernel_sizes=kernel_sizes,
     batch_size_train=batch_size_train,
     batch_size_val=batch_size_val,
     batch_size_test=batch_size_test,
