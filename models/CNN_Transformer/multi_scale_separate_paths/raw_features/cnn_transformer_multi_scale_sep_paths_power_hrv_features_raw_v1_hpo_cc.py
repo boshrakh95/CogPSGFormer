@@ -156,7 +156,7 @@ class MultiScaleCNNProjection(nn.Module):
         """
         super(MultiScaleCNNProjection, self).__init__()
 
-        assert len(kernel_sizes) == 3, "Three kernel sizes are required for multi-scale processing."
+        assert len(kernel_sizes) == 2, "Three kernel sizes are required for multi-scale processing."
 
         # Define 3 CNN branches for different scales
         self.cnn_branches = nn.ModuleList()
@@ -202,6 +202,7 @@ class MultiScaleCNNProjection(nn.Module):
                 out = cnn(segment)  # Shape: (batch_size, d_model_raw, reduced_length)
                 out = F.adaptive_avg_pool1d(out, 1).squeeze(-1)  # Global pooling -> (batch_size, d_model_raw)
                 multi_scale_outputs.append(out)
+            #
 
             # Concatenate outputs from all branches -> (batch_size, d_model_raw * 3)
             combined_segment = torch.cat(multi_scale_outputs, dim=1)
@@ -238,7 +239,7 @@ class MultiPathTransformerClassifier(nn.Module):
 
         # Positional encoding
         self.pos_enc1 = FixedPositionalEncoding(d_model_feat, dropout=dropout * (1.0 - freeze))
-        self.pos_enc2 = FixedPositionalEncoding(d_model_raw*3, dropout=dropout * (1.0 - freeze))
+        self.pos_enc2 = FixedPositionalEncoding(d_model_raw*2, dropout=dropout * (1.0 - freeze))
 
         # Transformer encoder layers
         self.transformer_time_hrv = nn.ModuleList([
@@ -246,16 +247,16 @@ class MultiPathTransformerClassifier(nn.Module):
             for _ in range(num_layers_feat)
         ])
         self.transformer_ecg = nn.ModuleList([
-            TransformerBatchNormEncoderLayer(d_model_raw * 3, nhead, dim_feedforward_raw, dropout, activation, norm)
+            TransformerBatchNormEncoderLayer(d_model_raw * 2, nhead, dim_feedforward_raw, dropout, activation, norm)
             for _ in range(num_layers_raw)
         ])
         self.transformer_eeg = nn.ModuleList([
-            TransformerBatchNormEncoderLayer(d_model_raw * 3, nhead, dim_feedforward_raw, dropout, activation, norm)
+            TransformerBatchNormEncoderLayer(d_model_raw * 2, nhead, dim_feedforward_raw, dropout, activation, norm)
             for _ in range(num_layers_raw)
         ])
 
         # Fully connected layers
-        self.fc = nn.Linear((d_model_feat * 3) + (d_model_raw * 3 * 2), dim_fc)
+        self.fc = nn.Linear((d_model_feat * 3) + (d_model_raw * 2 * 2), dim_fc)
         self.layer_out = nn.Linear(dim_fc, output_dim)
         self.dropout = nn.Dropout(dropout)
 
