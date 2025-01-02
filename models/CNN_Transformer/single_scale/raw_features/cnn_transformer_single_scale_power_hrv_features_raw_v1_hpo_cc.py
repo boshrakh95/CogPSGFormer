@@ -19,7 +19,7 @@
 # Update from v1: target changed to 'pcet_concept_level_responses' from the sum of the two
 
 # TODO: add other evaluation metrics with their plots (ROC curve, confusion matrix, etc.)
-
+print("entered file", flush=True)
 
 # from typing import Optional, Any
 import math
@@ -42,15 +42,18 @@ import os
 # import shutil
 import csv
 import argparse
+import sys, traceback
 import matplotlib.pyplot as plt
 import matplotlib
 matplotlib.use('Agg')
 # matplotlib.use('TkAgg')
 
+print("import modules")
 torch.cuda.is_available()
 torch.cuda.empty_cache()
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:128'
 torch.autograd.set_detect_anomaly(True)
+print("start the script")
 
 
 def parse_args():
@@ -952,9 +955,10 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
         test_loader = DataLoader(test_dataset, batch_size=batch_size_test, shuffle=False)
 
         # Setup configurations for hyperparameter optimization
-        num_config = 20  # Number of configurations to try
+        num_config = 10  # Number of configurations to try
         random2.seed(42)
         all_configs = list(product(*hyperparams.values()))  # Generate all possible configurations
+        print(f"Total number of configurations generated: {len(all_configs)}")
         config_keys = list(hyperparams.keys())
         selected_configs = random2.sample(all_configs, num_config)  # Randomly sample 5 configurations
 
@@ -984,6 +988,7 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
                                 dim_fc=conf_dict["dim_fc"], output_dim=output_dim, dropout=conf_dict["dropout"],
                                 activation=activation, norm=norm,
                                 freeze=freeze, task_type=task_type).to(device)
+            print("model created")
             optimizer = torch.optim.Adam(model.parameters(), lr=conf_dict["learning_rate"])
             if task_type == "classification":
                 if output_dim == 1:
@@ -996,15 +1001,19 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
                 raise ValueError("task_type should be 'classification' or 'regression'")
 
             # Train and validate the model
-            if task_type == "classification":
-                train_losses, val_losses, train_accuracies, val_accuracies = \
-                    train_model(model, criterion, optimizer, train_loader, val_loader, conf_dict["num_epochs"], device,
-                                task_output_dir, fold_dir, task, task_type, conf_idx, fold)
-            else:
-                train_losses, val_losses = \
-                    train_model(model, criterion, optimizer, train_loader, val_loader, conf_dict["num_epochs"], device,
-                                task_output_dir, fold_dir, task, task_type, conf_idx, fold)
-
+            try:
+                if task_type == "classification":
+                    train_losses, val_losses, train_accuracies, val_accuracies = \
+                        train_model(model, criterion, optimizer, train_loader, val_loader, conf_dict["num_epochs"], device,
+                                    task_output_dir, fold_dir, task, task_type, conf_idx, fold)
+                else:
+                    train_losses, val_losses = \
+                        train_model(model, criterion, optimizer, train_loader, val_loader, conf_dict["num_epochs"], device,
+                                    task_output_dir, fold_dir, task, task_type, conf_idx, fold)
+            except Exception as e:
+                print(f"Unhandled exception: {e}", file=sys.stderr)
+                traceback.print_exc(file=sys.stderr)
+                sys.exit(1)
             test_result = test_model(model, test_loader, device, task_output_dir, fold_dir, task, task_type, conf_idx,
                                      fold)
 
@@ -1128,6 +1137,7 @@ dir_eeg = sorted(glob2.glob(path_file + '/PSGs/[!p]*/eeg_segmented_30sec/*'))
 dir_power = path_save + "/yasa_c3_eeg_rel_powers.npy"
 dir_hrv_t = path_save + "/neurokit_hrv_params_t.npy"
 dir_hrv_f = path_save + "/neurokit_hrv_params_f.npy"
+print("paths set")
 
 # ID of subjects with proper data (found in "test_rnn_power.py" read_input)
 subj_retained_for_power_analysis = pd.read_csv(path_save + "/subjects_retained_for_power_analysis.csv", header=None)
