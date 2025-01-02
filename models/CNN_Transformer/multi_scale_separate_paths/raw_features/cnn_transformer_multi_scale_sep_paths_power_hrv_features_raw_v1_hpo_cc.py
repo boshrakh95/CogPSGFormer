@@ -18,7 +18,7 @@
 
 # TODO: add other evaluation metrics with their plots (ROC curve, confusion matrix, etc.)
 
-
+print("entered the file")
 # from typing import Optional, Any
 import math
 import torch
@@ -37,6 +37,7 @@ import random2
 import pandas as pd
 import re
 import os
+import sys, traceback
 # import shutil
 import csv
 import argparse
@@ -46,11 +47,12 @@ import matplotlib
 matplotlib.use('Agg')
 # matplotlib.use('TkAgg')
 
+print("imported the libraries")
 torch.cuda.is_available()
 torch.cuda.empty_cache()
 os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:128'
 torch.autograd.set_detect_anomaly(True)
-
+print("start reading the script")
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Training script')
@@ -906,7 +908,7 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
         test_loader = DataLoader(test_dataset, batch_size=batch_size_test, shuffle=False)
 
         # Setup configurations for hyperparameter optimization
-        num_config = 20  # Number of configurations to try
+        num_config = 6  # Number of configurations to try
         random2.seed(42)
         all_configs = list(product(*hyperparams.values()))  # Generate all possible configurations
         config_keys = list(hyperparams.keys())
@@ -927,7 +929,7 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
         for conf_idx, conf in enumerate(selected_configs):
             # Map the configuration tuple to a dictionary
             conf_dict = dict(zip(config_keys, conf))
-            print(f"Training with configuration {conf_idx + 1}: {conf_dict}")
+            print(f"Training with configuration {conf_idx + 1}: {conf_dict}", flush=True)
 
             model = model_class(feat_dims=feat_dims, raw_dims=raw_dims,
                                 d_model_feat=conf_dict["d_model_feat"], d_model_raw=conf_dict["d_model_raw"],
@@ -951,15 +953,19 @@ def train_model_multiple_tasks(dir_features, dir_raw, names_input, target_file, 
                 raise ValueError("task_type should be 'classification' or 'regression'")
 
             # Train and validate the model
-            if task_type == "classification":
-                train_losses, val_losses, train_accuracies, val_accuracies = \
-                    train_model(model, criterion, optimizer, train_loader, val_loader, conf_dict["num_epochs"], device,
-                                task_output_dir, fold_dir, task, task_type, conf_idx, fold)
-            else:
-                train_losses, val_losses = \
-                    train_model(model, criterion, optimizer, train_loader, val_loader, conf_dict["num_epochs"], device,
-                                task_output_dir, fold_dir, task, task_type, conf_idx, fold)
-
+            try:
+                if task_type == "classification":
+                    train_losses, val_losses, train_accuracies, val_accuracies = \
+                        train_model(model, criterion, optimizer, train_loader, val_loader, conf_dict["num_epochs"], device,
+                                    task_output_dir, fold_dir, task, task_type, conf_idx, fold)
+                else:
+                    train_losses, val_losses = \
+                        train_model(model, criterion, optimizer, train_loader, val_loader, conf_dict["num_epochs"], device,
+                                    task_output_dir, fold_dir, task, task_type, conf_idx, fold)
+            except Exception as e:
+                print(f"Unhandled exception: {e}", file=sys.stderr)
+                traceback.print_exc(file=sys.stderr)
+                sys.exit(1)
             test_result = test_model(model, test_loader, device, task_output_dir, fold_dir, task, task_type, conf_idx,
                                      fold)
 
