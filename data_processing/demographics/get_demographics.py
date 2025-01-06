@@ -5,7 +5,7 @@ demographics_file = '/media/livia/Elements/public_sleep_data/stages/stages/origi
 demographics_df = pd.read_excel(demographics_file)
 
 # Retain only relevant columns
-demographics_df = demographics_df[['s_code', 'age', 'sex', 'bmi', 'sleep_time']]
+demographics_df = demographics_df[['s_code', 'age', 'sex', 'bmi', 'sleep_time', 'ahi']]
 
 # Load the CSV file containing IDs for analysis
 ids_file = '/media/livia/Elements/public_sleep_data/stages/stages/original/yasa_eeg_powers/final_subjs_pcet_for_demog.csv'
@@ -33,6 +33,9 @@ std_bmi = filtered_demographics_df['bmi'].std()
 mean_age = filtered_demographics_df['age'].mean()
 std_age = filtered_demographics_df['age'].std()
 
+# Count of people with AHI >= 15 (moderate to severe OSA)
+moderate_severe_osa_count = (filtered_demographics_df['ahi'] >= 15).sum()
+
 # Display the results
 # print("\nMissing IDs (no demographics available):")
 # print(missing_ids)
@@ -42,4 +45,6 @@ print(f"\nMean BMI: {mean_bmi:.2f}, Standard Deviation BMI: {std_bmi:.2f}")
 print(f"Mean Age: {mean_age:.2f}, Standard Deviation Age: {std_age:.2f}")
 print(f"\nMinimum Sleep Duration: {min_sleep_duration/3600}")
 print(f"Maximum Sleep Duration: {max_sleep_duration/3600}")
+print(f"\nCount of people with AHI >= 15 (Moderate to Severe OSA): {moderate_severe_osa_count}")
+print(f"\nPercentage of people with AHI >= 15 (Moderate to Severe OSA): {moderate_severe_osa_count/len(filtered_demographics_df)*100:.2f}%")
 a = 0
