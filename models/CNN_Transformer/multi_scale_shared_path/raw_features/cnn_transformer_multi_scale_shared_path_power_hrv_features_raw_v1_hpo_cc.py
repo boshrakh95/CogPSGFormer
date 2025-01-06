@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# @Time    : 2 Jan 2024
+# @Time    : 6 Jan 2024
 # @Author  : Boshra
 
 # fixed CNN-transformer arch, EEG(c3-m2) powers of 6 bands + ECG time/freq HRV features over time + raw ECG/EEG signals
@@ -145,49 +145,42 @@ class TransformerBatchNormEncoderLayer(nn.Module):
         return src
 
 
-class MultiScaleCNNProjection(nn.Module):
+class SharedMultiScaleCNNProjection(nn.Module):
     def __init__(self, d_model_raw, num_cnn_layers, kernel_sizes, stride=1, dropout=0.1):
         """
-        Multi-Scale CNN Projection for raw data streams (e.g., EEG or ECG), applied sequentially on segments.
+        Shared-Layer Multi-Scale CNN Projection for raw data streams (e.g., EEG or ECG), applied sequentially on segments.
 
         Args:
             d_model_raw (int): Target feature dimension for each CNN branch.
-            num_cnn_layers (int): Number of CNN layers in each branch.
+            num_cnn_layers (int): Number of CNN layers in the shared CNN.
             kernel_sizes (list): List of kernel sizes for multi-scale processing.
             stride (int): Stride for the convolution.
             dropout (float): Dropout rate.
         """
-        super(MultiScaleCNNProjection, self).__init__()
+        super(SharedMultiScaleCNNProjection, self).__init__()
 
-        assert len(kernel_sizes) == 2, "Three kernel sizes are required for multi-scale processing."
+        self.kernel_sizes = kernel_sizes
+        self.num_cnn_layers = num_cnn_layers
+        self.shared_cnn = nn.ModuleList()
 
-        # Define 3 CNN branches for different scales
-        self.cnn_branches = nn.ModuleList()
-        for kernel_size in kernel_sizes:
-            layers = []
-            in_channels = 1  # Input has 1 channel initially
-            for _ in range(num_cnn_layers):
-                layers.append(nn.Conv1d(
-                    in_channels=in_channels, out_channels=d_model_raw,
-                    kernel_size=kernel_size, stride=stride, padding=kernel_size // 2
-                ))
-                layers.append(nn.ReLU())  # Activation
-                layers.append(nn.BatchNorm1d(d_model_raw))  # Normalization
-                layers.append(nn.Dropout(dropout))  # Dropout
-                in_channels = d_model_raw  # Next layer input matches output channels
-            self.cnn_branches.append(nn.Sequential(*layers))
-
+        # Define shared CNN layers (one set of weights for all kernel sizes)
+        in_channels = 1  # Input has 1 channel initially
+        self.shared_cnn = nn.Conv1d(
+            in_channels=in_channels, out_channels=d_model_raw,
+            kernel_size=max(kernel_sizes),  # Initialize with the largest kernel size
+            stride=stride, padding=max(kernel_sizes) // 2
+        )
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
         """
-        Forward pass through multi-scale CNN branches applied segment by segment.
+        Forward pass through shared-layer multi-scale CNN applied segment by segment.
 
         Args:
             x (tensor): Input of shape (batch_size, num_segments, num_samples_per_segment).
 
         Returns:
-            tensor: Combined output of shape (batch_size, num_segments, d_model_raw * 3).
+            tensor: Combined output of shape (batch_size, num_segments, d_model_raw * len(kernel_sizes)).
         """
         batch_size, num_segments, num_samples_per_segment = x.shape
 
@@ -196,23 +189,29 @@ class MultiScaleCNNProjection(nn.Module):
 
         # Process each segment independently
         for segment_idx in range(num_segments):
-            # Extract one segment -> (batch_size, 1, num_samples_per_segment)
-            segment = x[:, segment_idx, :].unsqueeze(1)
+            segment = x[:, segment_idx, :].unsqueeze(1)  # Shape -> (batch_size, 1, num_samples_per_segment)
 
-            # Pass through each CNN branch
             multi_scale_outputs = []
-            for cnn in self.cnn_branches:
-                out = cnn(segment)  # Shape: (batch_size, d_model_raw, reduced_length)
+            for kernel_size in self.kernel_sizes:
+                out = segment  # Start with the input segment
+                for layer_idx in range(self.num_cnn_layers):
+                    # Dynamically slice weights to match the desired kernel size
+                    weight = self.shared_cnn.weight[:, :, :kernel_size]
+                    bias = self.shared_cnn.bias
+                    padding = kernel_size // 2
+
+                    # Apply convolution with sliced weights
+                    out = F.conv1d(out, weight, bias, stride=self.shared_cnn.stride, padding=padding)
+                    out = F.relu(out)  # Apply activation
+                    out = F.batch_norm(out, self.shared_cnn.weight, self.shared_cnn.bias)
+
                 out = F.adaptive_avg_pool1d(out, 1).squeeze(-1)  # Global pooling -> (batch_size, d_model_raw)
                 multi_scale_outputs.append(out)
-            #
 
-            # Concatenate outputs from all branches -> (batch_size, d_model_raw * 3)
-            combined_segment = torch.cat(multi_scale_outputs, dim=1)
+            combined_segment = torch.cat(multi_scale_outputs, dim=1)  # Concatenate multi-scale outputs
             combined_segments.append(combined_segment)
 
-        # Stack all processed segments -> (batch_size, num_segments, d_model_raw * 3)
-        combined = torch.stack(combined_segments, dim=1)
+        combined = torch.stack(combined_segments, dim=1)  # Stack segments
         combined = self.dropout(combined)
 
         return combined
@@ -232,17 +231,17 @@ class MultiPathTransformerClassifier(nn.Module):
         self.project_freq_hrv = nn.Linear(feat_dims[1], d_model_feat)
         self.project_power = nn.Linear(feat_dims[2], d_model_feat)
 
-        # Multi-Scale CNN projection heads for raw data
-        self.project_ecg = MultiScaleCNNProjection(
+        # Shared Multi-Scale CNN projection heads for raw data
+        self.project_ecg = SharedMultiScaleCNNProjection(
             d_model_raw=d_model_raw, num_cnn_layers=num_cnn_layers, kernel_sizes=kernel_sizes, dropout=dropout
         )
-        self.project_eeg = MultiScaleCNNProjection(
+        self.project_eeg = SharedMultiScaleCNNProjection(
             d_model_raw=d_model_raw, num_cnn_layers=num_cnn_layers, kernel_sizes=kernel_sizes, dropout=dropout
         )
 
         # Positional encoding
         self.pos_enc1 = FixedPositionalEncoding(d_model_feat, dropout=dropout * (1.0 - freeze))
-        self.pos_enc2 = FixedPositionalEncoding(d_model_raw*2, dropout=dropout * (1.0 - freeze))
+        self.pos_enc2 = FixedPositionalEncoding(d_model_raw * len(kernel_sizes), dropout=dropout * (1.0 - freeze))
 
         # Transformer encoder layers
         self.transformer_time_hrv = nn.ModuleList([
@@ -250,22 +249,22 @@ class MultiPathTransformerClassifier(nn.Module):
             for _ in range(num_layers_feat)
         ])
         self.transformer_ecg = nn.ModuleList([
-            TransformerBatchNormEncoderLayer(d_model_raw * 2, nhead, dim_feedforward_raw, dropout, activation, norm)
+            TransformerBatchNormEncoderLayer(d_model_raw * len(kernel_sizes), nhead, dim_feedforward_raw, dropout, activation, norm)
             for _ in range(num_layers_raw)
         ])
         self.transformer_eeg = nn.ModuleList([
-            TransformerBatchNormEncoderLayer(d_model_raw * 2, nhead, dim_feedforward_raw, dropout, activation, norm)
+            TransformerBatchNormEncoderLayer(d_model_raw * len(kernel_sizes), nhead, dim_feedforward_raw, dropout, activation, norm)
             for _ in range(num_layers_raw)
         ])
 
         # Fully connected layers
-        self.fc = nn.Linear((d_model_feat * 3) + (d_model_raw * 2 * 2), dim_fc)
+        self.fc = nn.Linear((d_model_feat * 3) + (d_model_raw * len(kernel_sizes) * 2), dim_fc)
         self.layer_out = nn.Linear(dim_fc, output_dim)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x_time_hrv, x_freq_hrv, x_power, x_ecg, x_eeg):
         # Project raw data using CNN
-        x_ecg = self.project_ecg(x_ecg)  # Multi-Scale CNN -> (batch_size, num_segments, d_model_raw * 3)
+        x_ecg = self.project_ecg(x_ecg)  # Multi-Scale CNN -> (batch_size, num_segments, d_model_raw * len(kernel_sizes))
         x_eeg = self.project_eeg(x_eeg)
 
         # Linear projection for feature inputs
