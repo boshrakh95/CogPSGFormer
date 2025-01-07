@@ -203,7 +203,17 @@ class SharedMultiScaleCNNProjection(nn.Module):
                     # Apply convolution with sliced weights
                     out = F.conv1d(out, weight, bias, stride=self.shared_cnn.stride, padding=padding)
                     out = F.relu(out)  # Apply activation
-                    out = F.batch_norm(out, self.shared_cnn.weight, self.shared_cnn.bias)
+
+                    # out = F.batch_norm(out, self.shared_cnn.weight, self.shared_cnn.bias)  # gives error
+
+                    # Apply batch normalization dynamically
+                    # out = F.batch_norm(
+                    #     out, running_mean=torch.zeros(d_model_raw).to(out.device),
+                    #     running_var=torch.ones(d_model_raw).to(out.device),
+                    #     weight=None, bias=None, training=True
+                    # )
+
+                    out = F.batch_norm(out)
 
                 out = F.adaptive_avg_pool1d(out, 1).squeeze(-1)  # Global pooling -> (batch_size, d_model_raw)
                 multi_scale_outputs.append(out)
