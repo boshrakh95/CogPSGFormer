@@ -185,7 +185,7 @@ class SharedMultiScaleCNNProjection(nn.Module):
         Returns:
             tensor: Combined output of shape (batch_size, num_segments, d_model_raw * len(kernel_sizes)).
         """
-        batch_size, num_segments, num_samples_per_segment = x.shape
+        batch_size, num_channels, num_segments, num_samples_per_segment = x.shape
 
         # Initialize an empty list to collect processed segments
         combined_segments = []
@@ -273,7 +273,7 @@ class MultiPathTransformerClassifier(nn.Module):
 
     def forward(self, x_time_hrv, x_freq_hrv, x_power, x_raw):
         # Project raw data using CNN
-        x_raw = self.project_ecg(x_raw)  # Multi-Scale CNN -> (batch_size, num_segments, d_model_raw * len(kernel_sizes))
+        x_raw = self.project_raw(x_raw)  # Multi-Scale CNN -> (batch_size, num_segments, d_model_raw * len(kernel_sizes))
 
         # Linear projection for feature inputs
         x_time_hrv = self.project_time_hrv(x_time_hrv)
@@ -366,7 +366,7 @@ class MyDataset(Dataset):
             power = (power - self.stats['power_mean']) / self.stats['power_std']
             hrv_time = (hrv_time - self.stats['hrv_t_mean']) / self.stats['hrv_t_std']
             hrv_freq = (hrv_freq - self.stats['hrv_f_mean']) / self.stats['hrv_f_std']
-        raw = self.resample_concat(eeg, ecg, target_sf=90, seg_duration=2*60)
+        raw = self.resample_concat(eeg, ecg, target_sf=90)
 
         return {
             'power': power,
@@ -397,14 +397,13 @@ class MyDataset(Dataset):
         return data
 
     @staticmethod
-    def resample_concat(eeg, ecg, target_sf, seg_duration=120):
+    def resample_concat(eeg, ecg, target_sf):
         """
         Resample and concatenate EEG and ECG signals to a common sampling frequency.
         Args:
             eeg (ndarray): EEG signal with shape (num_segments1, num_samples1).
             ecg (ndarray): ECG signal with shape (num_segments2, num_samples2).
             target_sf (int): Target sampling frequency after resampling (90 Hz).
-            seg_duration (int): New length of the segments in seconds.
         Returns:
             ndarray: Concatenated EEG and ECG signals with shape (num_channels=2, num_segments, num_samples_per_segment)
         """
@@ -426,7 +425,7 @@ class MyDataset(Dataset):
         # Step 3: Concatenate ECG and EEG along the last axis
         concatenated_signal = np.stack([ecg, resegmented_eeg], axis=-1)  # Current shape: (150, 10800, 2)
 
-        concatenated_signal = concatenated_signal.permute(2, 0, 1)  # New shape: (2, 150, 10800)
+        concatenated_signal = concatenated_signal.transpose((2, 0, 1))  # New shape: (2, 150, 10800)
 
         return concatenated_signal
 
