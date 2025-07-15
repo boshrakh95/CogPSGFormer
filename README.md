@@ -1,2 +1,2 @@
-# yasa_proj
-cognitive prediction based on STAGES dataset
+# CogPSGFormer
+cognitive prediction based on the STAGES dataset
